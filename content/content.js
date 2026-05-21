@@ -292,23 +292,28 @@ async function processTask(task) {
 
 // 主循环
 async function mainLoop() {
+  console.log('[Runway Queue] mainLoop called, isRunning:', isRunning);
+
   if (!isRunning) {
-    console.log('[Runway Queue] 队列已暂停');
+    console.log('[Runway Queue] mainLoop: isRunning is false, returning');
     return;
   }
 
   // 获取当前任务
+  console.log('[Runway Queue] mainLoop: requesting task from background...');
   const response = await chrome.runtime.sendMessage({ type: 'getCurrentTask' });
+  console.log('[Runway Queue] mainLoop: got response:', JSON.stringify(response));
   const { task, index } = response;
 
   if (!task) {
-    console.log('[Runway Queue] 队列为空或已全部完成');
+    console.log('[Runway Queue] mainLoop: no task, queue might be empty or done');
     isRunning = false;
     await chrome.runtime.sendMessage({ type: 'stopQueue' });
     return;
   }
 
   currentTask = task;
+  console.log('[Runway Queue] mainLoop: got task:', task.prompt.substring(0, 30) + '...');
 
   // 检查是否正在生成
   if (isGenerating()) {

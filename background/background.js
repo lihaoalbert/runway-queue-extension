@@ -16,7 +16,10 @@ async function loadData() {
   queue = data.queue || [];
   settings = { ...settings, ...data.settings };
   currentIndex = data.currentIndex || 0;
-  isRunning = data.isRunning || false;
+  // 使用 undefined 检查而不是 || false，避免重置状态
+  if (data.isRunning !== undefined) {
+    isRunning = data.isRunning;
+  }
 }
 
 // 保存数据到 storage
@@ -99,9 +102,11 @@ async function handleMessage(message) {
       return { success: true };
 
     case 'startQueue':
+      console.log('[Runway Queue BG] startQueue called, current queue:', queue.length, 'tasks');
       isRunning = true;
       await saveData();
       notifyContentScript('queueUpdated', { queue, currentIndex, isRunning });
+      console.log('[Runway Queue BG] startQueue done, isRunning:', isRunning);
       return { success: true };
 
     case 'stopQueue':
@@ -144,9 +149,12 @@ async function handleMessage(message) {
       return { success: true };
 
     case 'getCurrentTask':
-      if (isRunning && currentIndex < queue.length) {
+      console.log('[Runway Queue BG] getCurrentTask called, isRunning:', isRunning, 'currentIndex:', currentIndex, 'queueLength:', queue.length);
+      if (isRunning && queue.length > 0 && currentIndex < queue.length) {
+        console.log('[Runway Queue BG] Returning task:', queue[currentIndex]);
         return { task: queue[currentIndex], index: currentIndex };
       }
+      console.log('[Runway Queue BG] No task to return');
       return { task: null };
 
     default:
