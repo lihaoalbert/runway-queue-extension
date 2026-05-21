@@ -312,68 +312,37 @@ async function clickGenerateButton() {
 }
 
 // 检查是否正在生成中（支持 2 个并发额度）
+// 核心逻辑：只要有一个可用的 Generate 按钮，就不等待
 function isGenerating() {
-  // 检查 Generate 按钮是否被禁用
+  // 检查主 Generate 按钮是否可用
   const generateBtn = document.querySelector('button:has(svg.lucide-video)');
-  if (generateBtn) {
-    if (generateBtn.disabled) return true;
-    const softDisabled = generateBtn.getAttribute('data-soft-disabled');
-    if (softDisabled === 'true') return true;
+  if (generateBtn && isButtonEnabled(generateBtn)) {
+    console.log('[Runway Queue] Generate 按钮可用，不等待');
+    return false;
   }
 
-  // 检查 primaryButton 是否被禁用
+  // 检查 primaryButton 是否可用
   const primaryBtns = document.querySelectorAll('button[class*="primaryButton"]');
   for (const btn of primaryBtns) {
-    if (btn.disabled) return true;
-    const softDisabled = btn.getAttribute('data-soft-disabled');
-    if (softDisabled === 'true') return true;
+    if (isButtonEnabled(btn)) {
+      console.log('[Runway Queue] primaryButton 可用，不等待');
+      return false;
+    }
   }
 
-  // 检查按钮文字是否包含 generating
+  // 检查任何包含 Generate 文字的可用按钮
   const buttons = document.querySelectorAll('button');
   for (const btn of buttons) {
     const text = btn.textContent.toLowerCase();
-    if (text.includes('generating') || text.includes('生成中')) {
-      return true;
+    if (text.includes('generate') && isButtonEnabled(btn)) {
+      console.log('[Runway Queue] 找到可用的 Generate 按钮，不等待');
+      return false;
     }
   }
 
-  // 检查 video 是否在加载
-  const videoElements = document.querySelectorAll('video');
-  for (const video of videoElements) {
-    if (video.readyState < 3) {
-      return true;
-    }
-  }
-
-  // 检查 loading/progress 相关元素（重点检测 Runway 的进度指示器）
-  const loadingElements = document.querySelectorAll(
-    '[class*="progress"]',
-    '[class*="loading"]',
-    '[class*="spinner"]',
-    '[class*="queue"]',
-    '[class*="pending"]'
-  );
-  for (const el of loadingElements) {
-    if (el.offsetParent !== null && getComputedStyle(el).display !== 'none') {
-      // 排除一些误报
-      const className = el.className.toLowerCase();
-      if (!className.includes('sidebar') && !className.includes('navigation')) {
-        return true;
-      }
-    }
-  }
-
-  // 检查是否有任务卡片显示处理中
-  const taskCards = document.querySelectorAll('[class*="task"], [class*="job"], [class*="jobCard"]');
-  for (const card of taskCards) {
-    const text = card.textContent.toLowerCase();
-    if (text.includes('processing') || text.includes('running') || text.includes('queued')) {
-      return true;
-    }
-  }
-
-  return false;
+  // 没有找到可用的按钮，所有槽位都被占用
+  console.log('[Runway Queue] 没有可用的 Generate 按钮，槽位已满，等待...');
+  return true;
 }
 
 // 记录上一次检测到的状态，避免重复判断
