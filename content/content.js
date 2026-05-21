@@ -25,8 +25,16 @@ async function loadStateFromStorage() {
       settings = { ...settings, ...data.settings };
     }
     console.log('[Runway Queue] Loaded state: isRunning=', isRunning, 'queueLength=', queue.length, 'currentIndex=', currentIndex);
+    return true;
   } catch (e) {
+    if (e.message && e.message.includes('Extension context invalidated')) {
+      console.warn('[Runway Queue] Extension context invalidated, stopping...');
+      stopPolling();
+      isRunning = false;
+      return false;
+    }
     console.error('[Runway Queue] Error loading state:', e);
+    return false;
   }
 }
 
@@ -34,8 +42,16 @@ async function loadStateFromStorage() {
 async function saveStateToStorage() {
   try {
     await chrome.storage.local.set({ queue, currentIndex, isRunning, settings });
+    return true;
   } catch (e) {
+    if (e.message && e.message.includes('Extension context invalidated')) {
+      console.warn('[Runway Queue] Extension context invalidated, stopping...');
+      stopPolling();
+      isRunning = false;
+      return false;
+    }
     console.error('[Runway Queue] Error saving state:', e);
+    return false;
   }
 }
 
@@ -281,7 +297,12 @@ async function inputPromptWithParts(parts) {
   console.log('[Runway Queue] 完整文本前100字:', JSON.stringify(fullText.substring(0, 100)));
 
   // 方法1: 尝试使用剪贴板粘贴
+  let clipboardSuccess = false;
   try {
+    // 确保窗口有焦点
+    window.focus();
+    await randomDelay(100);
+
     // 清空输入框
     promptInput.innerHTML = '';
     promptInput.textContent = '';
@@ -299,15 +320,46 @@ async function inputPromptWithParts(parts) {
     console.log('[Runway Queue] 已粘贴');
 
     await randomDelay(500);
-    console.log('[Runway Queue] 粘贴后内容长度:', promptInput.textContent.length);
+    const pastedLength = promptInput.textContent ? promptInput.textContent.length : 0;
+    console.log('[Runway Queue] 粘贴后内容长度:', pastedLength);
+    clipboardSuccess = pastedLength > 0;
   } catch (e) {
     console.log('[Runway Queue] 剪贴板方法失败:', e.message);
   }
 
+  // 方法2: 如果剪贴板失败，回退到逐字符输入
+  if (!clipboardSuccess) {
+    console.log('[Runway Queue] 回退到逐字符输入...');
+    promptInput.innerHTML = '';
+    promptInput.textContent = '';
+    promptInput.dispatchEvent(new InputEvent('input', { bubbles: true }));
+    await randomDelay(200);
+
+    promptInput.focus();
+    await randomDelay(100);
+
+    for (const part of parts) {
+      const text = part.type === 'reference' ? part.content + '\n' : part.content;
+      for (let i = 0; i < text.length; i++) {
+        const char = text[i];
+        // 使用 execCommand 插入字符
+        document.execCommand('insertText', false, char);
+        await randomDelay(20 + Math.random() * 30);
+      }
+      // 参考图后额外等待
+      if (part.type === 'reference') {
+        await randomDelay(500);
+      }
+    }
+
+    await randomDelay(500);
+    console.log('[Runway Queue] 逐字符输入完成，内容长度:', promptInput.textContent ? promptInput.textContent.length : 0);
+  }
+
   // 检查结果
   const finalContent = promptInput.textContent;
-  console.log('[Runway Queue] 最终内容长度:', finalContent.length);
-  if (finalContent.length > 0) {
+  console.log('[Runway Queue] 最终内容长度:', finalContent ? finalContent.length : 0);
+  if (finalContent && finalContent.length > 0) {
     console.log('[Runway Queue] 输入成功！');
   } else {
     console.log('[Runway Queue] 输入可能失败，请手动检查');
@@ -460,7 +512,8 @@ async function processTask(task) {
 // 主循环
 async function mainLoop() {
   // 每次轮询都重新读取 storage 状态
-  await loadStateFromStorage();
+  const loaded = await loadStateFromStorage();
+  if (!loaded) return; // 上下文失效，停止执行
 
   console.log('[Runway Queue] mainLoop, isRunning:', isRunning, 'queueLength:', queue.length, 'currentIndex:', currentIndex);
 
