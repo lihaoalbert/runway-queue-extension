@@ -135,15 +135,28 @@ function isButtonEnabled(btn) {
 
 // 查找 Prompt 输入框
 function findPromptInput() {
+  // 最优先：aria-label="Prompt" 的 contenteditable div
   const promptDiv = document.querySelector('[aria-label="Prompt"][contenteditable="true"]');
-  if (promptDiv) return promptDiv;
+  if (promptDiv) {
+    console.log('[Runway Queue] 找到输入框: aria-label="Prompt"');
+    return promptDiv;
+  }
 
+  // Lexical 编辑器
   const lexical = document.querySelector('[data-lexical-editor="true"]');
-  if (lexical) return lexical;
+  if (lexical) {
+    console.log('[Runway Queue] 找到输入框: data-lexical-editor');
+    return lexical;
+  }
 
+  // 通用 textbox
   const textbox = document.querySelector('div[class*="textbox"][contenteditable="true"]');
-  if (textbox) return textbox;
+  if (textbox) {
+    console.log('[Runway Queue] 找到输入框: class="textbox"');
+    return textbox;
+  }
 
+  console.log('[Runway Queue] 未找到输入框');
   return null;
 }
 
@@ -243,50 +256,49 @@ async function inputPromptWithParts(parts) {
   const deleteEvent = new KeyboardEvent('keydown', { key: 'Delete', keyCode: 46, bubbles: true });
   promptInput.dispatchEvent(deleteEvent);
 
-  // 方式5: 触发 input 事件
-  promptInput.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContent' }));
+  // 触发 input 事件
+  const inputEvent = new InputEvent('input', { bubbles: true, inputType: 'deleteContent' });
+  promptInput.dispatchEvent(inputEvent);
 
   await randomDelay(500);
 
-  console.log('[Runway Queue] 清空后内容:', promptInput.textContent || '(空)');
+  console.log('[Runway Queue] 清空后内容:', JSON.stringify(promptInput.textContent || '(空)'));
 
-  // 逐字输入每个部分
+  // 逐字输入每个部分 - 使用直接 DOM 操作
   console.log('[Runway Queue] 开始逐字输入，共', parts.length, '个部分');
   for (let i = 0; i < parts.length; i++) {
     const part = parts[i];
     if (part.type === 'text') {
-      console.log('[Runway Queue] 输入普通文本:', part.content.substring(0, 30));
-      // 普通文本，逐字输入
+      console.log('[Runway Queue] 输入文本:', JSON.stringify(part.content.substring(0, 30)));
       for (const char of part.content) {
-        document.execCommand('insertText', false, char);
-        await randomDelay(20 + Math.random() * 30); // 20-50ms 每字
+        // 直接添加到 textContent
+        promptInput.textContent += char;
+        // 触发 input 事件
+        const charEvent = new InputEvent('input', { bubbles: true, data: char });
+        promptInput.dispatchEvent(charEvent);
+        await randomDelay(30 + Math.random() * 30);
       }
     } else if (part.type === 'reference') {
       console.log('[Runway Queue] 输入参考图:', part.content);
-      // @参考图，逐字输入 @xxx
       for (const char of part.content) {
-        document.execCommand('insertText', false, char);
-        await randomDelay(20 + Math.random() * 30);
+        promptInput.textContent += char;
+        const charEvent = new InputEvent('input', { bubbles: true, data: char });
+        promptInput.dispatchEvent(charEvent);
+        await randomDelay(30 + Math.random() * 30);
       }
-      // @参考图 结束后按 Enter 键
-      console.log('[Runway Queue] 参考图输入完成，按 Enter 键');
-      const enterEvent = new KeyboardEvent('keydown', {
-        key: 'Enter',
-        keyCode: 13,
-        which: 13,
-        bubbles: true,
-        cancelable: true
-      });
-      promptInput.dispatchEvent(enterEvent);
-      await randomDelay(500); // 增加等待时间，让 Runway 有时间响应
+      // 参考图完成后按 Enter
+      console.log('[Runway Queue] 参考图输入完成，按 Enter');
+      const enterDown = new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true });
+      const enterPress = new KeyboardEvent('keypress', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true });
+      const enterUp = new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true });
+      promptInput.dispatchEvent(enterDown);
+      promptInput.dispatchEvent(enterPress);
+      promptInput.dispatchEvent(enterUp);
+      await randomDelay(500);
     }
   }
   console.log('[Runway Queue] 所有部分输入完成');
-
-  // 触发完成事件
-  promptInput.dispatchEvent(new InputEvent('input', { bubbles: true }));
-
-  console.log('[Runway Queue] 逐字输入完成');
+  console.log('[Runway Queue] 最终内容长度:', promptInput.textContent.length);
   await randomDelay(500);
 }
 
@@ -410,12 +422,7 @@ async function processTask(task) {
     // 2. 等待页面加载
     await waitForElement('body', 5000);
 
-    // 3. 设置时长（如果配置了）
-    if (settings.defaultDuration) {
-      await setDuration(settings.defaultDuration);
-    }
-
-    // 4. 逐字输入提示词（带 @参考图 回车）
+    // 3. 逐字输入提示词（带 @参考图 回车）- 不再选择时长，页面会记住上次的设置
     await inputPromptWithParts(parts);
     await randomDelay(settings.successDelay);
 
