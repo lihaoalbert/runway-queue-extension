@@ -61,6 +61,7 @@ function bindEvents() {
     document.getElementById(id).addEventListener('change', updateSettings);
   });
   document.getElementById('defaultDuration').addEventListener('change', updateSettings);
+  document.getElementById('testMode').addEventListener('change', updateSettings);
 
   // 回车提交 (Ctrl/Cmd + Enter)
   document.getElementById('promptInput').addEventListener('keydown', (e) => {
@@ -138,6 +139,7 @@ async function updateSettings() {
     successDelay: parseInt(document.getElementById('successDelay').value) * 1000,
     randomDelay: parseInt(document.getElementById('randomDelay').value) * 1000,
     defaultDuration: document.getElementById('defaultDuration').value,
+    testMode: document.getElementById('testMode').checked,
   };
   await saveStatus();
 }
@@ -175,6 +177,7 @@ function updateUI() {
     document.getElementById('successDelay').value = (currentStatus.settings.successDelay || 5000) / 1000;
     document.getElementById('randomDelay').value = (currentStatus.settings.randomDelay || 5000) / 1000;
     document.getElementById('defaultDuration').value = currentStatus.settings.defaultDuration || '';
+    document.getElementById('testMode').checked = currentStatus.settings.testMode || false;
   }
 }
 

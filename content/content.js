@@ -11,6 +11,7 @@ let settings = {
   randomDelay: 5000,         // 随机延迟范围 (ms)
   maxRetries: 3,             // 最大重试次数
   defaultDuration: '15s',   // 默认时长设置
+  testMode: false,           // 测试模式：不点击Generate按钮
 };
 
 // 直接从 storage 读取状态（不依赖 Service Worker）
@@ -205,8 +206,8 @@ async function setDuration(targetDuration) {
   }
 }
 
-// 向文本框输入内容（逐字输入，支持 @参考图 后回车）
-async function inputPrompt(text) {
+// 向文本框输入内容（使用已解析的文本段）
+async function inputPromptWithParts(parts) {
   const promptInput = findPromptInput();
 
   if (!promptInput) {
@@ -229,11 +230,6 @@ async function inputPrompt(text) {
   promptInput.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContent' }));
   await randomDelay(300);
 
-  // 解析文本，找出 @参考图 的位置
-  const parts = findReferenceImages(text);
-
-  console.log('[Runway Queue] 解析到', parts.length, '个文本段');
-
   // 逐字输入每个部分
   for (const part of parts) {
     if (part.type === 'text') {
@@ -251,7 +247,7 @@ async function inputPrompt(text) {
       // @参考图 结束后按回车
       console.log('[Runway Queue] 检测到参考图，输入回车');
       document.execCommand('insertText', false, '\n');
-      await randomDelay(200); // 等待回车生效
+      await randomDelay(500); // 增加等待时间，让 Runway 有时间响应
     }
   }
 
@@ -260,6 +256,12 @@ async function inputPrompt(text) {
 
   console.log('[Runway Queue] 逐字输入完成');
   await randomDelay(500);
+}
+
+// 向文本框输入内容（兼容旧调用）
+async function inputPrompt(text) {
+  const parts = findReferenceImages(text);
+  await inputPromptWithParts(parts);
 }
 
 // 点击生成按钮
@@ -384,11 +386,12 @@ function isGenerationComplete() {
 // 处理单个任务
 async function processTask(task) {
   console.log('[Runway Queue] 处理任务:', task.prompt.substring(0, 50) + '...');
+  console.log('[Runway Queue] 测试模式:', settings.testMode ? '开启' : '关闭');
 
   try {
-    // 1. 处理提示词（添加回车）
-    const processedPrompt = processPrompt(task.prompt);
-    console.log('[Runway Queue] 处理后提示词:', processedPrompt);
+    // 1. 解析提示词，获取文本段（用于逐字输入）
+    const parts = findReferenceImages(task.prompt);
+    console.log('[Runway Queue] 解析到', parts.length, '个文本段');
 
     // 2. 等待页面加载
     await waitForElement('body', 5000);
@@ -398,11 +401,18 @@ async function processTask(task) {
       await setDuration(settings.defaultDuration);
     }
 
-    // 4. 输入提示词
-    await inputPrompt(processedPrompt);
+    // 4. 逐字输入提示词（带 @参考图 回车）
+    await inputPromptWithParts(parts);
     await randomDelay(settings.successDelay);
 
-    // 5. 点击生成按钮
+    // 5. 测试模式下不点击生成按钮
+    if (settings.testMode) {
+      console.log('[Runway Queue] 测试模式：跳过点击生成按钮');
+      console.log('[Runway Queue] 请手动检查 @参考图 是否正确绑定');
+      return { success: true, testMode: true };
+    }
+
+    // 6. 点击生成按钮
     await clickGenerateButton();
     console.log('[Runway Queue] 已点击生成按钮');
 
