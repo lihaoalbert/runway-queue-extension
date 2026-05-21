@@ -90,12 +90,38 @@ function randomDelay(max) {
   return new Promise(resolve => setTimeout(resolve, delay));
 }
 
-// 处理提示词：在 @参考图片 后添加回车
-function processPrompt(prompt) {
-  // 匹配 @filename 的模式，后面可能是空格或其他字符
-  return prompt.replace(/(@\S+)(\s*)/g, (match, ref, whitespace) => {
-    return ref + whitespace + '\n';
-  });
+// 处理提示词：标记 @参考图片 的位置（用于逐字输入时检测）
+function findReferenceImages(prompt) {
+  const parts = [];
+  let lastEnd = 0;
+  const regex = /(@\S+)/g;
+  let match;
+
+  while ((match = regex.exec(prompt)) !== null) {
+    // 添加匹配前的文本
+    if (match.index > lastEnd) {
+      parts.push({
+        type: 'text',
+        content: prompt.slice(lastEnd, match.index)
+      });
+    }
+    // 添加 @参考图片 标记
+    parts.push({
+      type: 'reference',
+      content: match[1]
+    });
+    lastEnd = match.index + match[0].length;
+  }
+
+  // 添加剩余文本
+  if (lastEnd < prompt.length) {
+    parts.push({
+      type: 'text',
+      content: prompt.slice(lastEnd)
+    });
+  }
+
+  return parts;
 }
 
 // 检查按钮是否可用（考虑 data-soft-disabled）
@@ -179,7 +205,7 @@ async function setDuration(targetDuration) {
   }
 }
 
-// 向文本框输入内容
+// 向文本框输入内容（逐字输入，支持 @参考图 后回车）
 async function inputPrompt(text) {
   const promptInput = findPromptInput();
 
@@ -187,37 +213,52 @@ async function inputPrompt(text) {
     throw new Error('未找到文本输入框');
   }
 
-  console.log('[Runway Queue] 找到输入框，准备输入...');
+  console.log('[Runway Queue] 找到输入框，准备逐字输入...');
 
   // 点击输入框聚焦
   promptInput.click();
   await randomDelay(300);
 
-  // 聚焦并清空
+  // 聚焦
   promptInput.focus();
+  await randomDelay(100);
 
-  // 模拟 Ctrl+A 全选然后删除
-  const selectAll = new KeyboardEvent('keydown', { key: 'a', ctrlKey: true, bubbles: true });
-  document.dispatchEvent(selectAll);
-
-  // 清除现有内容 - 三种方式都试一下
+  // 清空现有内容
   promptInput.textContent = '';
   promptInput.innerHTML = '';
-
-  // 触发各种事件确保清空
   promptInput.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContent' }));
-  promptInput.dispatchEvent(new Event('change', { bubbles: true }));
+  await randomDelay(300);
 
-  await randomDelay(500);
+  // 解析文本，找出 @参考图 的位置
+  const parts = findReferenceImages(text);
 
-  // 使用三种方式之一输入文本
-  // 方式1: 直接设置 textContent
-  promptInput.textContent = text;
+  console.log('[Runway Queue] 解析到', parts.length, '个文本段');
 
-  // 方式2: 触发 input 事件
-  promptInput.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
+  // 逐字输入每个部分
+  for (const part of parts) {
+    if (part.type === 'text') {
+      // 普通文本，逐字输入
+      for (const char of part.content) {
+        document.execCommand('insertText', false, char);
+        await randomDelay(20 + Math.random() * 30); // 20-50ms 每字
+      }
+    } else if (part.type === 'reference') {
+      // @参考图，只输入 @xxx 不输入空格
+      for (const char of part.content) {
+        document.execCommand('insertText', false, char);
+        await randomDelay(20 + Math.random() * 30);
+      }
+      // @参考图 结束后按回车
+      console.log('[Runway Queue] 检测到参考图，输入回车');
+      document.execCommand('insertText', false, '\n');
+      await randomDelay(200); // 等待回车生效
+    }
+  }
 
-  console.log('[Runway Queue] 已输入提示词:', text.substring(0, 30) + '...');
+  // 触发完成事件
+  promptInput.dispatchEvent(new InputEvent('input', { bubbles: true }));
+
+  console.log('[Runway Queue] 逐字输入完成');
   await randomDelay(500);
 }
 
@@ -248,9 +289,9 @@ async function clickGenerateButton() {
   throw new Error('未找到可点击的生成按钮');
 }
 
-// 检查是否正在生成中
+// 检查是否正在生成中（支持 2 个并发额度）
 function isGenerating() {
-  // 检查 Generate 按钮是否被禁用（这是最直接的标志）
+  // 检查 Generate 按钮是否被禁用
   const generateBtn = document.querySelector('button:has(svg.lucide-video)');
   if (generateBtn) {
     if (generateBtn.disabled) return true;
@@ -283,14 +324,29 @@ function isGenerating() {
     }
   }
 
-  // 检查 loading/progress 相关元素
+  // 检查 loading/progress 相关元素（重点检测 Runway 的进度指示器）
   const loadingElements = document.querySelectorAll(
     '[class*="progress"]',
     '[class*="loading"]',
-    '[class*="spinner"]'
+    '[class*="spinner"]',
+    '[class*="queue"]',
+    '[class*="pending"]'
   );
   for (const el of loadingElements) {
     if (el.offsetParent !== null && getComputedStyle(el).display !== 'none') {
+      // 排除一些误报
+      const className = el.className.toLowerCase();
+      if (!className.includes('sidebar') && !className.includes('navigation')) {
+        return true;
+      }
+    }
+  }
+
+  // 检查是否有任务卡片显示处理中
+  const taskCards = document.querySelectorAll('[class*="task"], [class*="job"], [class*="jobCard"]');
+  for (const card of taskCards) {
+    const text = card.textContent.toLowerCase();
+    if (text.includes('processing') || text.includes('running') || text.includes('queued')) {
       return true;
     }
   }
