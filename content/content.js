@@ -236,7 +236,8 @@ async function setDuration(targetDuration) {
 }
 
 // 向文本框输入内容（使用已解析的文本段）
-async function inputPromptWithParts(parts) {
+// shouldContinue: 可选回调，返回 false 时中断输入
+async function inputPromptWithParts(parts, shouldContinue) {
   const promptInput = findPromptInput();
 
   if (!promptInput) {
@@ -354,9 +355,20 @@ async function inputPromptWithParts(parts) {
     await randomDelay(100);
 
     for (const part of parts) {
+      // 暂停检查
+      if (shouldContinue && !shouldContinue()) {
+        console.log('[Runway Queue] 输入被中断（已暂停）');
+        return;
+      }
+
       if (part.type === 'text') {
         // 普通文本：逐字符输入，正常速度
         for (let i = 0; i < part.content.length; i++) {
+          // 每 5 个字符检查一次暂停状态
+          if (shouldContinue && i % 5 === 0 && !shouldContinue()) {
+            console.log('[Runway Queue] 输入被中断（已暂停）');
+            return;
+          }
           document.execCommand('insertText', false, part.content[i]);
           await randomDelay(20 + Math.random() * 30);
         }
@@ -365,12 +377,26 @@ async function inputPromptWithParts(parts) {
         const refName = part.content;
         console.log('[Runway Queue] 输入参考图:', refName);
         for (let i = 0; i < refName.length; i++) {
+          if (shouldContinue && i % 3 === 0 && !shouldContinue()) {
+            console.log('[Runway Queue] 输入被中断（已暂停）');
+            return;
+          }
           document.execCommand('insertText', false, refName[i]);
           await randomDelay(20 + Math.random() * 30);
+        }
+        // 暂停检查（1秒等待前）
+        if (shouldContinue && !shouldContinue()) {
+          console.log('[Runway Queue] 输入被中断（已暂停）');
+          return;
         }
         // 最后一个字符后等 1 秒再回车，确保 Runway 有时间识别参考图
         console.log('[Runway Queue] 等待 1 秒后回车绑定参考图...');
         await randomDelay(1000);
+        // 暂停检查（回车前）
+        if (shouldContinue && !shouldContinue()) {
+          console.log('[Runway Queue] 输入被中断（已暂停）');
+          return;
+        }
         // 派发 Enter 按键事件来绑定参考图
         promptInput.dispatchEvent(new KeyboardEvent('keydown', {
           key: 'Enter',
@@ -479,28 +505,43 @@ function isGenerating() {
   return true;
 }
 
-// 记录上一次检测到的状态，避免重复判断
-let lastGenerationCheckTime = 0;
-let wasGeneratingBefore = false;
-
-// 检查生成是否成功完成（改进版）
-function isGenerationComplete() {
-  // 如果之前不在生成状态，现在也不算完成
-  if (!wasGeneratingBefore && !isGenerating()) {
+// 检查已提交任务的生成是否完成
+// 判断依据：生成按钮恢复可用 + 至少过了最小等待时间
+function isTaskGenerationDone() {
+  const task = queue[currentIndex];
+  if (!task || !task.submittedAt) {
+    // 没有 submittedAt 时间戳，无法判断，默认未完成
     return false;
   }
 
-  // 如果之前在生成，现在不在了，才算可能完成
-  if (wasGeneratingBefore && !isGenerating()) {
-    console.log('[Runway Queue] 生成似乎已完成');
-    wasGeneratingBefore = false;
+  // 最小等待时间：至少等 30 秒再判断（避免误判）
+  const minWait = 30000;
+  const elapsed = Date.now() - task.submittedAt;
+  if (elapsed < minWait) {
+    console.log('[Runway Queue] 提交后才过了', Math.round(elapsed / 1000), '秒，至少等 30 秒');
+    return false;
+  }
+
+  // 检查生成按钮是否恢复可用
+  const generateBtn = document.querySelector('button:has(svg.lucide-video)');
+  if (generateBtn && isButtonEnabled(generateBtn)) {
+    console.log('[Runway Queue] Generate 按钮已恢复，生成已完成');
     return true;
   }
 
-  // 之前在生成，现在还在生成
-  if (isGenerating()) {
-    wasGeneratingBefore = true;
-    return false;
+  const primaryBtns = document.querySelectorAll('button[class*="primaryButton"]');
+  for (const btn of primaryBtns) {
+    if (isButtonEnabled(btn)) {
+      console.log('[Runway Queue] primaryButton 已恢复，生成已完成');
+      return true;
+    }
+  }
+
+  // 超时保护：超过 10 分钟认为完成
+  const maxTimeout = 600000;
+  if (elapsed > maxTimeout) {
+    console.log('[Runway Queue] 超过 10 分钟，强制推进');
+    return true;
   }
 
   return false;
@@ -511,6 +552,12 @@ async function processTask(task) {
   console.log('[Runway Queue] 处理任务:', task.prompt.substring(0, 50) + '...');
   console.log('[Runway Queue] 测试模式:', settings.testMode ? '开启' : '关闭');
 
+  // 开始前检查是否已被暂停
+  if (!isRunning) {
+    console.log('[Runway Queue] 已被暂停，取消处理');
+    return { success: false, error: 'paused' };
+  }
+
   try {
     // 1. 解析提示词，获取文本段（用于逐字输入）
     const parts = findReferenceImages(task.prompt);
@@ -519,9 +566,15 @@ async function processTask(task) {
     // 2. 等待页面加载
     await waitForElement('body', 5000);
 
-    // 3. 逐字输入提示词（带 @参考图 回车）- 不再选择时长，页面会记住上次的设置
-    await inputPromptWithParts(parts);
+    // 3. 逐字输入提示词（带 @参考图 回车）
+    await inputPromptWithParts(parts, () => isRunning);
     await randomDelay(settings.successDelay);
+
+    // 再次检查是否被暂停
+    if (!isRunning) {
+      console.log('[Runway Queue] 输入完成但已被暂停，取消提交');
+      return { success: false, error: 'paused' };
+    }
 
     // 5. 测试模式下不点击生成按钮
     if (settings.testMode) {
@@ -534,9 +587,11 @@ async function processTask(task) {
     await clickGenerateButton();
     console.log('[Runway Queue] 已点击生成按钮');
 
+    // 记录提交时间，用于后续判断生成是否完成
+    task.submittedAt = Date.now();
+
     return { success: true };
   } catch (error) {
-    // 返回错误信息，由 mainLoop 判断是否是并发已满
     console.error('[Runway Queue] 任务处理失败:', error.message);
     return { success: false, error: error.message };
   }
@@ -572,23 +627,28 @@ async function mainLoop() {
   }
 
   currentTask = task;
-  console.log('[Runway Queue] mainLoop: got task:', task.prompt.substring(0, 30) + '...');
+  console.log('[Runway Queue] mainLoop: got task:', task.prompt.substring(0, 30) + '...', 'status:', task.status);
 
-  // 检查是否正在生成
-  if (isGenerating()) {
-    console.log('[Runway Queue] 正在生成中，等待...');
+  // 如果任务已提交（status=running），检查生成是否完成，不要重复提交
+  if (task.status === 'running') {
+    console.log('[Runway Queue] 任务已提交，检查生成是否完成...');
+    const done = isTaskGenerationDone();
+    if (done) {
+      console.log('[Runway Queue] 生成完成，推进到下一个任务');
+      queue[currentIndex].status = 'completed';
+      queue[currentIndex].completedAt = new Date().toISOString();
+      currentIndex++;
+      await saveStateToStorage();
+      await randomDelay(settings.successDelay + Math.random() * settings.randomDelay);
+    } else {
+      console.log('[Runway Queue] 仍在生成中，等待...');
+    }
     return;
   }
 
-  // 检查是否已完成
-  if (isGenerationComplete()) {
-    console.log('[Runway Queue] 检测到生成完成！');
-    // 更新状态
-    queue[currentIndex].status = 'completed';
-    currentIndex++;
-    await saveStateToStorage();
-    // 随机延迟后再处理下一个
-    await randomDelay(settings.successDelay + Math.random() * settings.randomDelay);
+  // 检查是否正在生成（并发槽位检查）
+  if (isGenerating()) {
+    console.log('[Runway Queue] 正在生成中，等待...');
     return;
   }
 
