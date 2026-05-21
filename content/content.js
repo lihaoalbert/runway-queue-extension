@@ -438,7 +438,8 @@ async function processTask(task) {
 
     return { success: true };
   } catch (error) {
-    console.error('[Runway Queue] 任务处理失败:', error);
+    // 返回错误信息，由 mainLoop 判断是否是并发已满
+    console.error('[Runway Queue] 任务处理失败:', error.message);
     return { success: false, error: error.message };
   }
 }
@@ -501,13 +502,29 @@ async function mainLoop() {
     queue[currentIndex].status = 'running';
     await saveStateToStorage();
   } else {
-    console.error('[Runway Queue] 任务提交失败:', result.error);
-    queue[currentIndex].status = 'failed';
-    queue[currentIndex].error = result.error;
-    currentIndex++;
-    await saveStateToStorage();
-    // 失败后延迟重试
-    await randomDelay(settings.successDelay);
+    // 检查是否是"并发已满"错误（按钮被禁用）
+    const isConcurrentFull = result.error && (
+      result.error.includes('未找到可点击的生成按钮') ||
+      result.error.includes('Generate button') ||
+      result.error.includes('disabled')
+    );
+
+    if (isConcurrentFull) {
+      // 并发已满，正常情况，等待即可
+      console.log('[Runway Queue] 并发额度已满，等待中...');
+      queue[currentIndex].status = 'waiting';
+      await saveStateToStorage();
+      // 不增加索引，不标记失败，等待下一轮检查
+    } else {
+      // 其他错误，标记为失败
+      console.error('[Runway Queue] 任务提交失败:', result.error);
+      queue[currentIndex].status = 'failed';
+      queue[currentIndex].error = result.error;
+      currentIndex++;
+      await saveStateToStorage();
+      // 失败后延迟重试
+      await randomDelay(settings.successDelay);
+    }
   }
 }
 
