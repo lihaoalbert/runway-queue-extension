@@ -521,34 +521,7 @@ function isTaskGenerationDone() {
   }
 
   // 1. 检查是否有正在生成中的指示器
-  const generatingSelectors = [
-    '[class*="generating"]',
-    '[class*="Generating"]',
-    '[class*="processing"]',
-    '[class*="Processing"]',
-    '[class*="progress"]',
-    '[class*="Progress"]',
-    '[class*="loading"]',
-    '[class*="Loading"]',
-    '[aria-label*="generating"]',
-    '[aria-label*="Generating"]',
-    '[role="progressbar"]',
-    'svg[class*="animate-spin"]',
-    'svg[class*="spinner"]',
-  ];
-
-  let generatingCount = 0;
-  for (const sel of generatingSelectors) {
-    try {
-      const els = document.querySelectorAll(sel);
-      for (const el of els) {
-        // 只计算可见元素
-        if (el.offsetParent !== null || el.getClientRects().length > 0) {
-          generatingCount++;
-        }
-      }
-    } catch (e) { /* selector might be invalid */ }
-  }
+  const generatingCount = countGeneratingIndicators();
   console.log('[Runway Queue] 页面可见生成中指示器:', generatingCount, '个');
 
   if (generatingCount > 0) {
@@ -557,24 +530,7 @@ function isTaskGenerationDone() {
   }
 
   // 2. 检查是否有完成的视频（video 标签或下载按钮）
-  const completedSelectors = [
-    'video',
-    'video[src]',
-    '[class*="VideoPlayer"]',
-    '[class*="videoPlayer"]',
-    'button[aria-label*="download" i]',
-    'a[download]',
-    '[class*="DownloadButton"]',
-    '[class*="downloadButton"]',
-  ];
-
-  let completedCount = 0;
-  for (const sel of completedSelectors) {
-    try {
-      const els = document.querySelectorAll(sel);
-      completedCount += els.length;
-    } catch (e) { /* selector might be invalid */ }
-  }
+  const completedCount = countCompletedIndicators();
   console.log('[Runway Queue] 页面完成指示器:', completedCount, '个');
 
   if (completedCount > 0) {
@@ -613,6 +569,70 @@ function isTaskGenerationDone() {
 
   console.log('[Runway Queue] 生成尚未完成，已等待', Math.round(elapsed / 1000), '秒');
   return false;
+}
+
+// 统计页面上可见的生成中指示器数量
+function countGeneratingIndicators() {
+  const generatingSelectors = [
+    '[class*="generating"]',
+    '[class*="Generating"]',
+    '[class*="processing"]',
+    '[class*="Processing"]',
+    '[class*="progress"]',
+    '[class*="Progress"]',
+    '[class*="loading"]',
+    '[class*="Loading"]',
+    '[aria-label*="generating"]',
+    '[aria-label*="Generating"]',
+    '[role="progressbar"]',
+    'svg[class*="animate-spin"]',
+    'svg[class*="spinner"]',
+  ];
+
+  let count = 0;
+  for (const sel of generatingSelectors) {
+    try {
+      const els = document.querySelectorAll(sel);
+      for (const el of els) {
+        if (el.offsetParent !== null || el.getClientRects().length > 0) {
+          count++;
+        }
+      }
+    } catch (e) { /* selector might be invalid */ }
+  }
+  return count;
+}
+
+// 统计页面上完成指示器数量
+function countCompletedIndicators() {
+  const completedSelectors = [
+    'video',
+    'video[src]',
+    '[class*="VideoPlayer"]',
+    '[class*="videoPlayer"]',
+    'button[aria-label*="download" i]',
+    'a[download]',
+    '[class*="DownloadButton"]',
+    '[class*="downloadButton"]',
+  ];
+
+  let count = 0;
+  for (const sel of completedSelectors) {
+    try {
+      count += document.querySelectorAll(sel).length;
+    } catch (e) { /* selector might be invalid */ }
+  }
+  return count;
+}
+
+// 检查是否有可用的生成槽位
+function hasFreeGenerationSlot() {
+  const runningCount = queue.filter(t => t.status === 'running').length;
+  const generatingCount = countGeneratingIndicators();
+  const maxSlots = 2; // Runway Unlimited 并发槽位
+  const activeCount = Math.max(runningCount, generatingCount);
+  console.log('[Runway Queue] 槽位使用: runningTasks=', runningCount, 'generatingIndicators=', generatingCount, 'maxSlots=', maxSlots);
+  return activeCount < maxSlots;
 }
 
 // 处理单个任务
@@ -665,71 +685,97 @@ async function processTask(task) {
   }
 }
 
-// 主循环
+// 主循环：支持并发槽位填充
 async function mainLoop() {
-  // 每次轮询都重新读取 storage 状态
   const loaded = await loadStateFromStorage();
-  if (!loaded) return; // 上下文失效，停止执行
+  if (!loaded) return;
 
-  console.log('[Runway Queue] mainLoop, isRunning:', isRunning, 'queueLength:', queue.length, 'currentIndex:', currentIndex);
+  console.log('[Runway Queue] mainLoop, isRunning:', isRunning, 'queueLength:', queue.length);
 
   if (!isRunning) {
     console.log('[Runway Queue] mainLoop: isRunning is false, returning');
     return;
   }
 
-  if (queue.length === 0 || currentIndex >= queue.length) {
-    console.log('[Runway Queue] mainLoop: queue empty or done, stopping');
-    isRunning = false;
+  // Step 1: 检查 running 任务是否完成
+  const generatingCount = countGeneratingIndicators();
+  const runningTasks = queue.filter(t => t.status === 'running');
+  console.log('[Runway Queue] running:', runningTasks.length, 'generating:', generatingCount);
+
+  // 如果页面上生成中的数量少于 running 任务数，说明有任务完成了
+  if (runningTasks.length > 0 && generatingCount < runningTasks.length) {
+    const completedCount = runningTasks.length - generatingCount;
+    console.log('[Runway Queue] 检测到', completedCount, '个任务可能已完成');
+    // 标记最旧的 running 任务为完成
+    let marked = 0;
+    for (let i = 0; i < queue.length && marked < completedCount; i++) {
+      if (queue[i].status === 'running') {
+        queue[i].status = 'completed';
+        queue[i].completedAt = new Date().toISOString();
+        console.log('[Runway Queue] 标记任务', i, '为完成:', queue[i].prompt.substring(0, 30));
+        marked++;
+      }
+    }
     await saveStateToStorage();
-    return;
   }
 
-  // 获取当前任务（从本地状态）
-  const task = queue[currentIndex];
-  if (!task) {
-    console.log('[Runway Queue] mainLoop: no task at currentIndex');
-    isRunning = false;
-    await saveStateToStorage();
-    return;
+  // Step 2: 对所有 running 任务做兜底检查（超时保护）
+  for (let i = 0; i < queue.length; i++) {
+    if (queue[i].status === 'running' && queue[i].submittedAt) {
+      const elapsed = Date.now() - queue[i].submittedAt;
+      // 超过 20 分钟强制完成
+      if (elapsed > 1200000) {
+        console.log('[Runway Queue] 任务', i, '超过 20 分钟，强制完成');
+        queue[i].status = 'completed';
+        queue[i].completedAt = new Date().toISOString();
+        await saveStateToStorage();
+      }
+    }
   }
 
-  currentTask = task;
-  console.log('[Runway Queue] mainLoop: got task:', task.prompt.substring(0, 30) + '...', 'status:', task.status);
-
-  // 如果任务已提交（status=running），检查生成是否完成，不要重复提交
-  if (task.status === 'running') {
-    console.log('[Runway Queue] 任务已提交，检查生成是否完成...');
-    const done = isTaskGenerationDone();
-    if (done) {
-      console.log('[Runway Queue] 生成完成，推进到下一个任务');
-      queue[currentIndex].status = 'completed';
-      queue[currentIndex].completedAt = new Date().toISOString();
-      currentIndex++;
+  // Step 3: 查找下一个待提交的 pending 任务
+  const nextPendingIndex = queue.findIndex(t => t.status === 'pending');
+  if (nextPendingIndex === -1) {
+    // 所有任务都已提交或完成
+    const allDone = queue.every(t => t.status === 'completed' || t.status === 'failed');
+    if (allDone) {
+      console.log('[Runway Queue] 所有任务已完成，停止队列');
+      isRunning = false;
       await saveStateToStorage();
-      await randomDelay(settings.successDelay + Math.random() * settings.randomDelay);
     } else {
-      console.log('[Runway Queue] 仍在生成中，等待...');
+      console.log('[Runway Queue] 无待提交任务，等待 running 任务完成...');
     }
     return;
   }
 
-  // 检查是否正在生成（并发槽位检查）
-  if (isGenerating()) {
-    console.log('[Runway Queue] 正在生成中，等待...');
+  // Step 4: 检查是否有可用槽位
+  if (!hasFreeGenerationSlot()) {
+    console.log('[Runway Queue] 并发槽位已满，等待...');
     return;
   }
 
-  // 处理新任务
+  // Step 5: 有槽位且有任务 → 提交
+  const task = queue[nextPendingIndex];
+  currentIndex = nextPendingIndex;
+  currentTask = task;
+  console.log('[Runway Queue] 提交任务[', currentIndex, ']:', task.prompt.substring(0, 30) + '...');
+
+  // 提交前检查文本框清空后的 isGenerating（并发已满的快速检查）
+  if (isGenerating()) {
+    console.log('[Runway Queue] 文本框有内容但按钮禁用，并发已满，等待...');
+    return;
+  }
+
   const result = await processTask(task);
 
   if (result.success) {
-    console.log('[Runway Queue] 任务已提交，等待生成...');
-    // 标记为运行中
+    console.log('[Runway Queue] 任务[', currentIndex, ']已提交');
     queue[currentIndex].status = 'running';
     await saveStateToStorage();
+  } else if (result.error === 'paused') {
+    // 被暂停，不处理
+    return;
   } else {
-    // 检查是否是"并发已满"错误（按钮被禁用）
     const isConcurrentFull = result.error && (
       result.error.includes('未找到可点击的生成按钮') ||
       result.error.includes('Generate button') ||
@@ -737,19 +783,14 @@ async function mainLoop() {
     );
 
     if (isConcurrentFull) {
-      // 并发已满，正常情况，等待即可
       console.log('[Runway Queue] 并发额度已满，等待中...');
       queue[currentIndex].status = 'waiting';
       await saveStateToStorage();
-      // 不增加索引，不标记失败，等待下一轮检查
     } else {
-      // 其他错误，标记为失败
       console.error('[Runway Queue] 任务提交失败:', result.error);
       queue[currentIndex].status = 'failed';
       queue[currentIndex].error = result.error;
-      currentIndex++;
       await saveStateToStorage();
-      // 失败后延迟重试
       await randomDelay(settings.successDelay);
     }
   }
