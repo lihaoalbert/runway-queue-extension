@@ -506,15 +506,13 @@ function isGenerating() {
 }
 
 // 检查已提交任务的生成是否完成
-// 判断依据：生成按钮恢复可用 + 至少过了最小等待时间
 function isTaskGenerationDone() {
   const task = queue[currentIndex];
   if (!task || !task.submittedAt) {
-    // 没有 submittedAt 时间戳，无法判断，默认未完成
     return false;
   }
 
-  // 最小等待时间：至少等 30 秒再判断（避免误判）
+  // 最小等待时间：至少等 30 秒再判断（避免刚提交就误判完成）
   const minWait = 30000;
   const elapsed = Date.now() - task.submittedAt;
   if (elapsed < minWait) {
@@ -522,7 +520,69 @@ function isTaskGenerationDone() {
     return false;
   }
 
-  // 检查生成按钮是否恢复可用
+  // 1. 检查是否有正在生成中的指示器
+  const generatingSelectors = [
+    '[class*="generating"]',
+    '[class*="Generating"]',
+    '[class*="processing"]',
+    '[class*="Processing"]',
+    '[class*="progress"]',
+    '[class*="Progress"]',
+    '[class*="loading"]',
+    '[class*="Loading"]',
+    '[aria-label*="generating"]',
+    '[aria-label*="Generating"]',
+    '[role="progressbar"]',
+    'svg[class*="animate-spin"]',
+    'svg[class*="spinner"]',
+  ];
+
+  let generatingCount = 0;
+  for (const sel of generatingSelectors) {
+    try {
+      const els = document.querySelectorAll(sel);
+      for (const el of els) {
+        // 只计算可见元素
+        if (el.offsetParent !== null || el.getClientRects().length > 0) {
+          generatingCount++;
+        }
+      }
+    } catch (e) { /* selector might be invalid */ }
+  }
+  console.log('[Runway Queue] 页面可见生成中指示器:', generatingCount, '个');
+
+  if (generatingCount > 0) {
+    console.log('[Runway Queue] 仍有生成中指示器，继续等待...');
+    return false;
+  }
+
+  // 2. 检查是否有完成的视频（video 标签或下载按钮）
+  const completedSelectors = [
+    'video',
+    'video[src]',
+    '[class*="VideoPlayer"]',
+    '[class*="videoPlayer"]',
+    'button[aria-label*="download" i]',
+    'a[download]',
+    '[class*="DownloadButton"]',
+    '[class*="downloadButton"]',
+  ];
+
+  let completedCount = 0;
+  for (const sel of completedSelectors) {
+    try {
+      const els = document.querySelectorAll(sel);
+      completedCount += els.length;
+    } catch (e) { /* selector might be invalid */ }
+  }
+  console.log('[Runway Queue] 页面完成指示器:', completedCount, '个');
+
+  if (completedCount > 0) {
+    console.log('[Runway Queue] 检测到完成的视频，生成已完成');
+    return true;
+  }
+
+  // 3. 检查生成按钮是否恢复可用（辅助判断）
   const generateBtn = document.querySelector('button:has(svg.lucide-video)');
   if (generateBtn && isButtonEnabled(generateBtn)) {
     console.log('[Runway Queue] Generate 按钮已恢复，生成已完成');
@@ -537,13 +597,21 @@ function isTaskGenerationDone() {
     }
   }
 
-  // 超时保护：超过 10 分钟认为完成
+  // 4. 兜底判断：超过 2 分钟且没有生成指示器，认为完成
+  const softTimeout = 120000;
+  if (elapsed > softTimeout && generatingCount === 0) {
+    console.log('[Runway Queue] 超过 2 分钟且无生成指示器，认为完成');
+    return true;
+  }
+
+  // 5. 超时保护：超过 10 分钟强制推进
   const maxTimeout = 600000;
   if (elapsed > maxTimeout) {
     console.log('[Runway Queue] 超过 10 分钟，强制推进');
     return true;
   }
 
+  console.log('[Runway Queue] 生成尚未完成，已等待', Math.round(elapsed / 1000), '秒');
   return false;
 }
 
