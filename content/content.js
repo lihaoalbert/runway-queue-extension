@@ -296,40 +296,55 @@ async function inputPromptWithParts(parts) {
   console.log('[Runway Queue] 完整文本长度:', fullText.length);
   console.log('[Runway Queue] 完整文本前100字:', JSON.stringify(fullText.substring(0, 100)));
 
-  // 方法1: 尝试使用剪贴板粘贴
+  // 方法1: 尝试使用剪贴板粘贴（仅对无 @参考图 的纯文本提示有效）
+  const hasReferences = parts.some(p => p.type === 'reference');
   let clipboardSuccess = false;
-  try {
-    // 确保窗口有焦点
-    window.focus();
-    await randomDelay(100);
 
-    // 清空输入框
-    promptInput.innerHTML = '';
-    promptInput.textContent = '';
-    promptInput.dispatchEvent(new InputEvent('input', { bubbles: true }));
-    await randomDelay(200);
+  if (!hasReferences) {
+    try {
+      // 使用 textarea + execCommand('copy') 方式，不依赖 navigator.clipboard
+      promptInput.click();
+      promptInput.focus();
+      await randomDelay(200);
 
-    // 写入剪贴板
-    await navigator.clipboard.writeText(fullText);
-    console.log('[Runway Queue] 已写入剪贴板');
+      promptInput.innerHTML = '';
+      promptInput.textContent = '';
+      promptInput.dispatchEvent(new InputEvent('input', { bubbles: true }));
+      await randomDelay(200);
 
-    // 粘贴
-    promptInput.focus();
-    await randomDelay(100);
-    document.execCommand('paste');
-    console.log('[Runway Queue] 已粘贴');
+      // 通过 textarea 写入剪贴板（不需要 document focus）
+      const ta = document.createElement('textarea');
+      ta.value = fullText;
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      console.log('[Runway Queue] 已写入剪贴板 (execCommand)');
 
-    await randomDelay(500);
-    const pastedLength = promptInput.textContent ? promptInput.textContent.length : 0;
-    console.log('[Runway Queue] 粘贴后内容长度:', pastedLength);
-    clipboardSuccess = pastedLength > 0;
-  } catch (e) {
-    console.log('[Runway Queue] 剪贴板方法失败:', e.message);
+      // 粘贴
+      promptInput.focus();
+      await randomDelay(100);
+      document.execCommand('paste');
+      console.log('[Runway Queue] 已粘贴');
+
+      await randomDelay(500);
+      const pastedLength = promptInput.textContent ? promptInput.textContent.length : 0;
+      console.log('[Runway Queue] 粘贴后内容长度:', pastedLength);
+      clipboardSuccess = pastedLength > 0;
+    } catch (e) {
+      console.log('[Runway Queue] 剪贴板方法失败:', e.message);
+    }
+  } else {
+    console.log('[Runway Queue] 有 @参考图，跳过剪贴板，直接逐字输入');
   }
 
-  // 方法2: 如果剪贴板失败，回退到逐字符输入
+  // 方法2: 逐字符输入（@参考图 必须用此方式才能正确绑定）
   if (!clipboardSuccess) {
-    console.log('[Runway Queue] 回退到逐字符输入...');
+    if (!hasReferences) {
+      console.log('[Runway Queue] 剪贴板失败，回退到逐字符输入...');
+    }
     promptInput.innerHTML = '';
     promptInput.textContent = '';
     promptInput.dispatchEvent(new InputEvent('input', { bubbles: true }));
@@ -339,16 +354,34 @@ async function inputPromptWithParts(parts) {
     await randomDelay(100);
 
     for (const part of parts) {
-      const text = part.type === 'reference' ? part.content + '\n' : part.content;
-      for (let i = 0; i < text.length; i++) {
-        const char = text[i];
-        // 使用 execCommand 插入字符
-        document.execCommand('insertText', false, char);
-        await randomDelay(20 + Math.random() * 30);
-      }
-      // 参考图后额外等待
-      if (part.type === 'reference') {
-        await randomDelay(500);
+      if (part.type === 'text') {
+        // 普通文本：逐字符输入，正常速度
+        for (let i = 0; i < part.content.length; i++) {
+          document.execCommand('insertText', false, part.content[i]);
+          await randomDelay(20 + Math.random() * 30);
+        }
+      } else if (part.type === 'reference') {
+        // @参考图：逐字符输入参考图名称
+        const refName = part.content;
+        console.log('[Runway Queue] 输入参考图:', refName);
+        for (let i = 0; i < refName.length; i++) {
+          document.execCommand('insertText', false, refName[i]);
+          await randomDelay(20 + Math.random() * 30);
+        }
+        // 最后一个字符后等 1 秒再回车，确保 Runway 有时间识别参考图
+        console.log('[Runway Queue] 等待 1 秒后回车绑定参考图...');
+        await randomDelay(1000);
+        // 派发 Enter 按键事件来绑定参考图
+        promptInput.dispatchEvent(new KeyboardEvent('keydown', {
+          key: 'Enter',
+          code: 'Enter',
+          keyCode: 13,
+          which: 13,
+          bubbles: true,
+          cancelable: true
+        }));
+        await randomDelay(300);
+        console.log('[Runway Queue] 参考图已回车绑定:', refName);
       }
     }
 
