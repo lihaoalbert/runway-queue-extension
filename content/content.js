@@ -251,25 +251,37 @@ async function inputPromptWithParts(parts) {
   console.log('[Runway Queue] 清空后内容:', promptInput.textContent || '(空)');
 
   // 逐字输入每个部分
-  for (const part of parts) {
+  console.log('[Runway Queue] 开始逐字输入，共', parts.length, '个部分');
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i];
     if (part.type === 'text') {
+      console.log('[Runway Queue] 输入普通文本:', part.content.substring(0, 30));
       // 普通文本，逐字输入
       for (const char of part.content) {
         document.execCommand('insertText', false, char);
         await randomDelay(20 + Math.random() * 30); // 20-50ms 每字
       }
     } else if (part.type === 'reference') {
-      // @参考图，只输入 @xxx 不输入空格
+      console.log('[Runway Queue] 输入参考图:', part.content);
+      // @参考图，逐字输入 @xxx
       for (const char of part.content) {
         document.execCommand('insertText', false, char);
         await randomDelay(20 + Math.random() * 30);
       }
-      // @参考图 结束后按回车
-      console.log('[Runway Queue] 检测到参考图，输入回车');
-      document.execCommand('insertText', false, '\n');
+      // @参考图 结束后按 Enter 键
+      console.log('[Runway Queue] 参考图输入完成，按 Enter 键');
+      const enterEvent = new KeyboardEvent('keydown', {
+        key: 'Enter',
+        keyCode: 13,
+        which: 13,
+        bubbles: true,
+        cancelable: true
+      });
+      promptInput.dispatchEvent(enterEvent);
       await randomDelay(500); // 增加等待时间，让 Runway 有时间响应
     }
   }
+  console.log('[Runway Queue] 所有部分输入完成');
 
   // 触发完成事件
   promptInput.dispatchEvent(new InputEvent('input', { bubbles: true }));
