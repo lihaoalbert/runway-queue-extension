@@ -3,6 +3,9 @@
   "name": "Runway 队列助手",
   "version": "1.0.0",
   "description": "自动将提示词队列提交到 Runway 生成",
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  },
   "permissions": [
     "storage",
     "activeTab",

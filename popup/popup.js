@@ -195,17 +195,26 @@ function renderQueue() {
       task.prompt.substring(0, 60) + '...' : task.prompt;
 
     return `
-      <div class="queue-item ${itemClass}">
+      <div class="queue-item ${itemClass}" data-id="${task.id}">
         <span class="queue-item-index">${index + 1}</span>
         <div class="queue-item-content">
           <div class="queue-item-prompt">${escapeHtml(shortPrompt)}</div>
           <div class="queue-item-status ${statusClass}">${statusText}</div>
         </div>
-        <button class="delete-btn" onclick="deleteTask(${task.id})" title="删除">×</button>
+        <button class="delete-btn" data-delete-id="${task.id}" title="删除">×</button>
       </div>
     `;
   }).join('');
 }
+
+// 事件委托：删除按钮
+document.addEventListener('click', (e) => {
+  const deleteBtn = e.target.closest('[data-delete-id]');
+  if (deleteBtn) {
+    const id = parseInt(deleteBtn.dataset.deleteId, 10);
+    deleteTask(id);
+  }
+});
 
 // HTML 转义
 function escapeHtml(text) {
@@ -214,5 +223,3 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
-// 全局函数供按钮调用
-window.deleteTask = deleteTask;
