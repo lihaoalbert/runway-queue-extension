@@ -264,42 +264,54 @@ async function inputPromptWithParts(parts) {
 
   console.log('[Runway Queue] 清空后内容:', JSON.stringify(promptInput.textContent || '(空)'));
 
-  // 逐字输入每个部分 - 使用直接 DOM 操作
-  console.log('[Runway Queue] 开始逐字输入，共', parts.length, '个部分');
-  for (let i = 0; i < parts.length; i++) {
-    const part = parts[i];
+  // 逐字输入每个部分 - 使用剪贴板粘贴
+  console.log('[Runway Queue] 开始输入，共', parts.length, '个部分');
+
+  // 构建完整文本（在 @参考图 后添加换行）
+  let fullText = '';
+  for (const part of parts) {
     if (part.type === 'text') {
-      console.log('[Runway Queue] 输入文本:', JSON.stringify(part.content.substring(0, 30)));
-      for (const char of part.content) {
-        // 直接添加到 textContent
-        promptInput.textContent += char;
-        // 触发 input 事件
-        const charEvent = new InputEvent('input', { bubbles: true, data: char });
-        promptInput.dispatchEvent(charEvent);
-        await randomDelay(30 + Math.random() * 30);
-      }
+      fullText += part.content;
     } else if (part.type === 'reference') {
-      console.log('[Runway Queue] 输入参考图:', part.content);
-      for (const char of part.content) {
-        promptInput.textContent += char;
-        const charEvent = new InputEvent('input', { bubbles: true, data: char });
-        promptInput.dispatchEvent(charEvent);
-        await randomDelay(30 + Math.random() * 30);
-      }
-      // 参考图完成后按 Enter
-      console.log('[Runway Queue] 参考图输入完成，按 Enter');
-      const enterDown = new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true });
-      const enterPress = new KeyboardEvent('keypress', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true });
-      const enterUp = new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true });
-      promptInput.dispatchEvent(enterDown);
-      promptInput.dispatchEvent(enterPress);
-      promptInput.dispatchEvent(enterUp);
-      await randomDelay(500);
+      fullText += part.content + '\n';
     }
   }
-  console.log('[Runway Queue] 所有部分输入完成');
-  console.log('[Runway Queue] 最终内容长度:', promptInput.textContent.length);
-  await randomDelay(500);
+
+  console.log('[Runway Queue] 完整文本长度:', fullText.length);
+  console.log('[Runway Queue] 完整文本前100字:', JSON.stringify(fullText.substring(0, 100)));
+
+  // 方法1: 尝试使用剪贴板粘贴
+  try {
+    // 清空输入框
+    promptInput.innerHTML = '';
+    promptInput.textContent = '';
+    promptInput.dispatchEvent(new InputEvent('input', { bubbles: true }));
+    await randomDelay(200);
+
+    // 写入剪贴板
+    await navigator.clipboard.writeText(fullText);
+    console.log('[Runway Queue] 已写入剪贴板');
+
+    // 粘贴
+    promptInput.focus();
+    await randomDelay(100);
+    document.execCommand('paste');
+    console.log('[Runway Queue] 已粘贴');
+
+    await randomDelay(500);
+    console.log('[Runway Queue] 粘贴后内容长度:', promptInput.textContent.length);
+  } catch (e) {
+    console.log('[Runway Queue] 剪贴板方法失败:', e.message);
+  }
+
+  // 检查结果
+  const finalContent = promptInput.textContent;
+  console.log('[Runway Queue] 最终内容长度:', finalContent.length);
+  if (finalContent.length > 0) {
+    console.log('[Runway Queue] 输入成功！');
+  } else {
+    console.log('[Runway Queue] 输入可能失败，请手动检查');
+  }
 }
 
 // 向文本框输入内容（兼容旧调用）
