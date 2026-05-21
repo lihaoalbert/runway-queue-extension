@@ -1,4 +1,5 @@
 // Popup 脚本：管理界面交互
+// 直接与 chrome.storage.local 交互，不依赖 Service Worker
 
 let currentStatus = {
   queue: [],
@@ -14,14 +15,33 @@ document.addEventListener('DOMContentLoaded', async () => {
   updateUI();
 });
 
-// 加载状态
+// 直接从 storage 加载状态
 async function loadStatus() {
   try {
-    const response = await chrome.runtime.sendMessage({ type: 'getStatus' });
-    currentStatus = { ...currentStatus, ...response };
+    const data = await chrome.storage.local.get(['queue', 'settings', 'currentIndex', 'isRunning']);
+    currentStatus = {
+      queue: data.queue || [],
+      settings: data.settings || {},
+      currentIndex: data.currentIndex || 0,
+      isRunning: data.isRunning || false
+    };
     updateUI();
   } catch (error) {
     console.error('加载状态失败:', error);
+  }
+}
+
+// 直接保存状态到 storage
+async function saveStatus() {
+  try {
+    await chrome.storage.local.set({
+      queue: currentStatus.queue,
+      settings: currentStatus.settings,
+      currentIndex: currentStatus.currentIndex,
+      isRunning: currentStatus.isRunning
+    });
+  } catch (error) {
+    console.error('保存状态失败:', error);
   }
 }
 
@@ -49,27 +69,19 @@ function bindEvents() {
     }
   });
 
-  // 监听 background 消息更新
-  chrome.runtime.onMessage.addListener((message) => {
-    if (message.type === 'queueUpdated' || message.type === 'settingsUpdated') {
-      currentStatus = { ...currentStatus, ...message.data };
-      updateUI();
+  // 监听 storage 变化（content script 会更新 storage）
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName === 'local') {
+      loadStatus();
     }
   });
 }
 
 // 切换运行状态
 async function toggleRunning() {
-  const newState = !currentStatus.isRunning;
-
-  const response = await chrome.runtime.sendMessage({
-    type: newState ? 'startQueue' : 'stopQueue'
-  });
-
-  if (response.success) {
-    currentStatus.isRunning = newState;
-    updateUI();
-  }
+  currentStatus.isRunning = !currentStatus.isRunning;
+  await saveStatus();
+  updateUI();
 }
 
 // 添加到队列
@@ -82,15 +94,18 @@ async function addToQueue() {
     return;
   }
 
-  const response = await chrome.runtime.sendMessage({
-    type: 'addTask',
-    data: { prompt }
+  currentStatus.queue.push({
+    id: Date.now(),
+    prompt: prompt,
+    status: 'pending',
+    addedAt: new Date().toISOString(),
+    completedAt: null,
+    error: null,
   });
 
-  if (response.success) {
-    input.value = '';
-    await loadStatus();
-  }
+  await saveStatus();
+  input.value = '';
+  await loadStatus();
 }
 
 // 清空队列
@@ -99,42 +114,32 @@ async function clearQueue() {
 
   if (!confirm('确定要清空所有队列任务吗？')) return;
 
-  const response = await chrome.runtime.sendMessage({ type: 'clearQueue' });
-
-  if (response.success) {
-    await loadStatus();
-  }
+  currentStatus.queue = [];
+  currentStatus.currentIndex = 0;
+  currentStatus.isRunning = false;
+  await saveStatus();
+  await loadStatus();
 }
 
 // 删除单个任务
 async function deleteTask(id) {
-  const response = await chrome.runtime.sendMessage({
-    type: 'removeTask',
-    data: { id }
-  });
-
-  if (response.success) {
-    await loadStatus();
+  currentStatus.queue = currentStatus.queue.filter(t => t.id !== id);
+  if (currentStatus.currentIndex >= currentStatus.queue.length) {
+    currentStatus.currentIndex = 0;
   }
+  await saveStatus();
+  await loadStatus();
 }
 
 // 更新设置
 async function updateSettings() {
-  const settings = {
+  currentStatus.settings = {
     checkInterval: parseInt(document.getElementById('checkInterval').value) * 1000,
     successDelay: parseInt(document.getElementById('successDelay').value) * 1000,
     randomDelay: parseInt(document.getElementById('randomDelay').value) * 1000,
     defaultDuration: document.getElementById('defaultDuration').value,
   };
-
-  const response = await chrome.runtime.sendMessage({
-    type: 'updateSettings',
-    data: settings
-  });
-
-  if (response.success) {
-    currentStatus.settings = response.settings;
-  }
+  await saveStatus();
 }
 
 // 更新界面
@@ -146,12 +151,14 @@ function updateUI() {
 
   if (currentStatus.isRunning) {
     statusDot.classList.add('running');
-    statusText.textContent = `运行中 (${currentStatus.currentIndex + 1}/${currentStatus.queue.length})`;
+    const pendingCount = currentStatus.queue.filter(t => t.status !== 'completed' && t.status !== 'failed').length;
+    statusText.textContent = `运行中 (${pendingCount} 个待处理)`;
     toggleBtn.textContent = '停止';
     toggleBtn.classList.add('stop');
   } else {
     statusDot.classList.remove('running');
-    statusText.textContent = currentStatus.queue.length > 0 ? '已暂停' : '已停止';
+    const pendingCount = currentStatus.queue.filter(t => t.status !== 'completed' && t.status !== 'failed').length;
+    statusText.textContent = currentStatus.queue.length > 0 ? `已暂停 (${pendingCount} 个待处理)` : '已停止';
     toggleBtn.textContent = '开始';
     toggleBtn.classList.remove('stop');
   }
@@ -187,7 +194,7 @@ function renderQueue() {
 
     const itemClass = index === currentStatus.currentIndex ? 'current' : statusClass;
     const statusText = task.status === 'completed' ? '✓ 已完成' :
-                       task.status === 'failed' ? `✗ 失败: ${task.error}` :
+                       task.status === 'failed' ? `✗ 失败` :
                        task.status === 'running' ? '⟳ 处理中' : '○ 等待中';
 
     // 截断长提示词
@@ -222,4 +229,3 @@ function escapeHtml(text) {
   div.textContent = text;
   return div.innerHTML;
 }
-

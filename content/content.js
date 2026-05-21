@@ -3,6 +3,8 @@
 let isRunning = false;
 let currentTask = null;
 let checkInterval = null;
+let queue = [];
+let currentIndex = 0;
 let settings = {
   checkInterval: 60000,      // 检查间隔 (ms)
   successDelay: 5000,        // 成功后延迟 (ms)
@@ -10,6 +12,51 @@ let settings = {
   maxRetries: 3,             // 最大重试次数
   defaultDuration: '15s',   // 默认时长设置
 };
+
+// 直接从 storage 读取状态（不依赖 Service Worker）
+async function loadStateFromStorage() {
+  try {
+    const data = await chrome.storage.local.get(['queue', 'settings', 'currentIndex', 'isRunning']);
+    queue = data.queue || [];
+    currentIndex = data.currentIndex || 0;
+    isRunning = data.isRunning || false;
+    if (data.settings) {
+      settings = { ...settings, ...data.settings };
+    }
+    console.log('[Runway Queue] Loaded state: isRunning=', isRunning, 'queueLength=', queue.length, 'currentIndex=', currentIndex);
+  } catch (e) {
+    console.error('[Runway Queue] Error loading state:', e);
+  }
+}
+
+// 保存状态到 storage
+async function saveStateToStorage() {
+  try {
+    await chrome.storage.local.set({ queue, currentIndex, isRunning, settings });
+  } catch (e) {
+    console.error('[Runway Queue] Error saving state:', e);
+  }
+}
+
+// 监听 storage 变化
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName === 'local') {
+    if (changes.queue) queue = changes.queue.newValue || [];
+    if (changes.currentIndex) currentIndex = changes.currentIndex.newValue || 0;
+    if (changes.isRunning) {
+      isRunning = changes.isRunning.newValue;
+      if (isRunning) {
+        startPolling();
+      } else {
+        stopPolling();
+      }
+    }
+    if (changes.settings) {
+      settings = { ...settings, ...changes.settings.newValue };
+    }
+    console.log('[Runway Queue] State changed via storage listener');
+  }
+});
 
 // 等待元素出现的辅助函数
 function waitForElement(selector, timeout = 10000) {
@@ -292,23 +339,29 @@ async function processTask(task) {
 
 // 主循环
 async function mainLoop() {
-  console.log('[Runway Queue] mainLoop called, isRunning:', isRunning);
+  // 每次轮询都重新读取 storage 状态
+  await loadStateFromStorage();
+
+  console.log('[Runway Queue] mainLoop, isRunning:', isRunning, 'queueLength:', queue.length, 'currentIndex:', currentIndex);
 
   if (!isRunning) {
     console.log('[Runway Queue] mainLoop: isRunning is false, returning');
     return;
   }
 
-  // 获取当前任务
-  console.log('[Runway Queue] mainLoop: requesting task from background...');
-  const response = await chrome.runtime.sendMessage({ type: 'getCurrentTask' });
-  console.log('[Runway Queue] mainLoop: got response:', JSON.stringify(response));
-  const { task, index } = response;
-
-  if (!task) {
-    console.log('[Runway Queue] mainLoop: no task, queue might be empty or done');
+  if (queue.length === 0 || currentIndex >= queue.length) {
+    console.log('[Runway Queue] mainLoop: queue empty or done, stopping');
     isRunning = false;
-    await chrome.runtime.sendMessage({ type: 'stopQueue' });
+    await saveStateToStorage();
+    return;
+  }
+
+  // 获取当前任务（从本地状态）
+  const task = queue[currentIndex];
+  if (!task) {
+    console.log('[Runway Queue] mainLoop: no task at currentIndex');
+    isRunning = false;
+    await saveStateToStorage();
     return;
   }
 
@@ -324,8 +377,10 @@ async function mainLoop() {
   // 检查是否已完成
   if (isGenerationComplete()) {
     console.log('[Runway Queue] 检测到生成完成！');
-    await chrome.runtime.sendMessage({ type: 'taskCompleted' });
-
+    // 更新状态
+    queue[currentIndex].status = 'completed';
+    currentIndex++;
+    await saveStateToStorage();
     // 随机延迟后再处理下一个
     await randomDelay(settings.successDelay + Math.random() * settings.randomDelay);
     return;
@@ -336,13 +391,15 @@ async function mainLoop() {
 
   if (result.success) {
     console.log('[Runway Queue] 任务已提交，等待生成...');
+    // 标记为运行中
+    queue[currentIndex].status = 'running';
+    await saveStateToStorage();
   } else {
     console.error('[Runway Queue] 任务提交失败:', result.error);
-    await chrome.runtime.sendMessage({
-      type: 'taskFailed',
-      data: { error: result.error }
-    });
-
+    queue[currentIndex].status = 'failed';
+    queue[currentIndex].error = result.error;
+    currentIndex++;
+    await saveStateToStorage();
     // 失败后延迟重试
     await randomDelay(settings.successDelay);
   }
@@ -408,13 +465,12 @@ async function handleMessage(message, sendResponse) {
 // 初始化
 console.log('[Runway Queue] 内容脚本已加载');
 
-// 从 background 获取初始状态
-chrome.runtime.sendMessage({ type: 'getStatus' }, (response) => {
-  if (response && response.isRunning) {
-    isRunning = true;
+// 直接从 storage 加载状态，不依赖 background
+loadStateFromStorage().then(() => {
+  if (isRunning && queue.length > 0 && currentIndex < queue.length) {
+    console.log('[Runway Queue] Initializing: will start polling');
     startPolling();
-  }
-  if (response && response.settings) {
-    settings = { ...settings, ...response.settings };
+  } else {
+    console.log('[Runway Queue] Initializing: isRunning=', isRunning, 'queueLength=', queue.length);
   }
 });
