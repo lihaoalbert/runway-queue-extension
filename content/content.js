@@ -12,6 +12,7 @@ let settings = {
   maxRetries: 3,             // 最大重试次数
   defaultDuration: '15s',   // 默认时长设置
   testMode: false,           // 测试模式：不点击Generate按钮
+  generationTimeout: 900000, // 生成超时 (ms)，默认 15 分钟
 };
 
 // 直接从 storage 读取状态（不依赖 Service Worker）
@@ -625,14 +626,12 @@ function countCompletedIndicators() {
   return count;
 }
 
-// 检查是否有可用的生成槽位
+// 检查是否有可用的生成槽位（仅根据 running 任务数判断）
 function hasFreeGenerationSlot() {
   const runningCount = queue.filter(t => t.status === 'running').length;
-  const generatingCount = countGeneratingIndicators();
-  const maxSlots = 2; // Runway Unlimited 并发槽位
-  const activeCount = Math.max(runningCount, generatingCount);
-  console.log('[Runway Queue] 槽位使用: runningTasks=', runningCount, 'generatingIndicators=', generatingCount, 'maxSlots=', maxSlots);
-  return activeCount < maxSlots;
+  const maxSlots = 2;
+  console.log('[Runway Queue] 槽位: runningTasks=', runningCount, '/', maxSlots);
+  return runningCount < maxSlots;
 }
 
 // 处理单个任务
@@ -690,53 +689,35 @@ async function mainLoop() {
   const loaded = await loadStateFromStorage();
   if (!loaded) return;
 
-  console.log('[Runway Queue] mainLoop, isRunning:', isRunning, 'queueLength:', queue.length);
+  const genTimeout = settings.generationTimeout || 900000; // 默认 15 分钟
+  const runningTasks = queue.filter(t => t.status === 'running');
+
+  console.log('[Runway Queue] mainLoop, isRunning:', isRunning, 'queue:', queue.length, 'running:', runningTasks.length);
 
   if (!isRunning) {
-    console.log('[Runway Queue] mainLoop: isRunning is false, returning');
     return;
   }
 
-  // Step 1: 检查 running 任务是否完成
-  const generatingCount = countGeneratingIndicators();
-  const runningTasks = queue.filter(t => t.status === 'running');
-  console.log('[Runway Queue] running:', runningTasks.length, 'generating:', generatingCount);
-
-  // 如果页面上生成中的数量少于 running 任务数，说明有任务完成了
-  if (runningTasks.length > 0 && generatingCount < runningTasks.length) {
-    const completedCount = runningTasks.length - generatingCount;
-    console.log('[Runway Queue] 检测到', completedCount, '个任务可能已完成');
-    // 标记最旧的 running 任务为完成
-    let marked = 0;
-    for (let i = 0; i < queue.length && marked < completedCount; i++) {
-      if (queue[i].status === 'running') {
-        queue[i].status = 'completed';
-        queue[i].completedAt = new Date().toISOString();
-        console.log('[Runway Queue] 标记任务', i, '为完成:', queue[i].prompt.substring(0, 30));
-        marked++;
-      }
-    }
-    await saveStateToStorage();
-  }
-
-  // Step 2: 对所有 running 任务做兜底检查（超时保护）
+  // Step 1: 超时检查 — 对 running 任务，超过 genTimeout 标记完成
+  let stateChanged = false;
   for (let i = 0; i < queue.length; i++) {
     if (queue[i].status === 'running' && queue[i].submittedAt) {
       const elapsed = Date.now() - queue[i].submittedAt;
-      // 超过 20 分钟强制完成
-      if (elapsed > 1200000) {
-        console.log('[Runway Queue] 任务', i, '超过 20 分钟，强制完成');
+      if (elapsed > genTimeout) {
+        console.log('[Runway Queue] 任务[', i, ']已等待', Math.round(elapsed / 60000), '分钟，超时标记完成');
         queue[i].status = 'completed';
         queue[i].completedAt = new Date().toISOString();
-        await saveStateToStorage();
+        stateChanged = true;
       }
     }
   }
+  if (stateChanged) {
+    await saveStateToStorage();
+  }
 
-  // Step 3: 查找下一个待提交的 pending 任务
+  // Step 2: 查找下一个 pending 任务
   const nextPendingIndex = queue.findIndex(t => t.status === 'pending');
   if (nextPendingIndex === -1) {
-    // 所有任务都已提交或完成
     const allDone = queue.every(t => t.status === 'completed' || t.status === 'failed');
     if (allDone) {
       console.log('[Runway Queue] 所有任务已完成，停止队列');
@@ -748,21 +729,21 @@ async function mainLoop() {
     return;
   }
 
-  // Step 4: 检查是否有可用槽位
+  // Step 3: 检查是否有可用槽位
   if (!hasFreeGenerationSlot()) {
-    console.log('[Runway Queue] 并发槽位已满，等待...');
+    console.log('[Runway Queue] 并发槽位已满 (2/2)，等待...');
     return;
   }
 
-  // Step 5: 有槽位且有任务 → 提交
+  // Step 4: 有槽位 → 提交
   const task = queue[nextPendingIndex];
   currentIndex = nextPendingIndex;
   currentTask = task;
   console.log('[Runway Queue] 提交任务[', currentIndex, ']:', task.prompt.substring(0, 30) + '...');
 
-  // 提交前检查文本框清空后的 isGenerating（并发已满的快速检查）
+  // 快速检查：文本框有内容但按钮禁用 → 槽位确实满了
   if (isGenerating()) {
-    console.log('[Runway Queue] 文本框有内容但按钮禁用，并发已满，等待...');
+    console.log('[Runway Queue] 按钮禁用，并发已满，等待...');
     return;
   }
 
@@ -773,7 +754,6 @@ async function mainLoop() {
     queue[currentIndex].status = 'running';
     await saveStateToStorage();
   } else if (result.error === 'paused') {
-    // 被暂停，不处理
     return;
   } else {
     const isConcurrentFull = result.error && (
@@ -783,7 +763,7 @@ async function mainLoop() {
     );
 
     if (isConcurrentFull) {
-      console.log('[Runway Queue] 并发额度已满，等待中...');
+      console.log('[Runway Queue] 提交失败：并发已满，等待...');
       queue[currentIndex].status = 'waiting';
       await saveStateToStorage();
     } else {
