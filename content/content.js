@@ -312,9 +312,22 @@ async function clickGenerateButton() {
 }
 
 // 检查是否正在生成中（支持 2 个并发额度）
-// 核心逻辑：只要有一个可用的 Generate 按钮，就不等待
+// 核心逻辑：
+// 1. 如果文本框为空，Generate 按钮禁用是正常的，不等待
+// 2. 如果文本框有内容但按钮禁用，说明并发已满，等待
 function isGenerating() {
-  // 检查主 Generate 按钮是否可用
+  // 检查文本框是否有内容
+  const promptInput = findPromptInput();
+  const hasContent = promptInput && promptInput.textContent && promptInput.textContent.trim().length > 0;
+  console.log('[Runway Queue] 文本框内容长度:', hasContent ? promptInput.textContent.trim().length : 0);
+
+  // 如果文本框为空，按钮禁用是正常的，不等待
+  if (!hasContent) {
+    console.log('[Runway Queue] 文本框为空，按钮禁用是正常的，不等待');
+    return false;
+  }
+
+  // 文本框有内容，检查按钮是否可用
   const generateBtn = document.querySelector('button:has(svg.lucide-video)');
   if (generateBtn && isButtonEnabled(generateBtn)) {
     console.log('[Runway Queue] Generate 按钮可用，不等待');
@@ -340,8 +353,8 @@ function isGenerating() {
     }
   }
 
-  // 没有找到可用的按钮，所有槽位都被占用
-  console.log('[Runway Queue] 没有可用的 Generate 按钮，槽位已满，等待...');
+  // 文本框有内容，但按钮被禁用 → 并发槽位已满
+  console.log('[Runway Queue] 文本框有内容但按钮禁用，槽位已满，等待...');
   return true;
 }
 
