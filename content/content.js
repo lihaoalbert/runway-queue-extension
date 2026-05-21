@@ -140,20 +140,38 @@ async function inputPrompt(text) {
     throw new Error('未找到文本输入框');
   }
 
+  console.log('[Runway Queue] 找到输入框，准备输入...');
+
+  // 点击输入框聚焦
+  promptInput.click();
+  await randomDelay(300);
+
+  // 聚焦并清空
   promptInput.focus();
-  await randomDelay(200);
 
-  // 清除现有内容
+  // 模拟 Ctrl+A 全选然后删除
+  const selectAll = new KeyboardEvent('keydown', { key: 'a', ctrlKey: true, bubbles: true });
+  document.dispatchEvent(selectAll);
+
+  // 清除现有内容 - 三种方式都试一下
   promptInput.textContent = '';
+  promptInput.innerHTML = '';
+
+  // 触发各种事件确保清空
   promptInput.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContent' }));
+  promptInput.dispatchEvent(new Event('change', { bubbles: true }));
 
-  await randomDelay(300);
+  await randomDelay(500);
 
-  // 输入新内容
-  document.execCommand('insertText', false, text);
-  promptInput.dispatchEvent(new InputEvent('input', { bubbles: true }));
+  // 使用三种方式之一输入文本
+  // 方式1: 直接设置 textContent
+  promptInput.textContent = text;
 
-  await randomDelay(300);
+  // 方式2: 触发 input 事件
+  promptInput.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
+
+  console.log('[Runway Queue] 已输入提示词:', text.substring(0, 30) + '...');
+  await randomDelay(500);
 }
 
 // 点击生成按钮
@@ -213,31 +231,28 @@ function isGenerating() {
   return false;
 }
 
-// 检查生成是否成功完成
+// 记录上一次检测到的状态，避免重复判断
+let lastGenerationCheckTime = 0;
+let wasGeneratingBefore = false;
+
+// 检查生成是否成功完成（改进版）
 function isGenerationComplete() {
-  // 检查是否有新的视频内容出现
-  const videos = document.querySelectorAll('video');
-  for (const video of videos) {
-    if (video.readyState >= 3 && video.duration > 0) {
-      return true;
-    }
+  // 如果之前不在生成状态，现在也不算完成
+  if (!wasGeneratingBefore && !isGenerating()) {
+    return false;
   }
 
-  // 检查成功提示
-  const successIndicators = document.querySelectorAll(
-    '[class*="success"], [class*="complete"], [class*="done"]'
-  );
-
-  for (const el of successIndicators) {
-    if (el.offsetParent !== null) {
-      return true;
-    }
-  }
-
-  // 检查是否有新的图片生成
-  const images = document.querySelectorAll('img[src*="generated"], img[src*="result"]');
-  if (images.length > 0) {
+  // 如果之前在生成，现在不在了，才算可能完成
+  if (wasGeneratingBefore && !isGenerating()) {
+    console.log('[Runway Queue] 生成似乎已完成');
+    wasGeneratingBefore = false;
     return true;
+  }
+
+  // 之前在生成，现在还在生成
+  if (isGenerating()) {
+    wasGeneratingBefore = true;
+    return false;
   }
 
   return false;
