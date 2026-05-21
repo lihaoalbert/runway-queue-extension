@@ -250,7 +250,23 @@ async function clickGenerateButton() {
 
 // 检查是否正在生成中
 function isGenerating() {
-  // 检查按钮是否显示 generating 状态
+  // 检查 Generate 按钮是否被禁用（这是最直接的标志）
+  const generateBtn = document.querySelector('button:has(svg.lucide-video)');
+  if (generateBtn) {
+    if (generateBtn.disabled) return true;
+    const softDisabled = generateBtn.getAttribute('data-soft-disabled');
+    if (softDisabled === 'true') return true;
+  }
+
+  // 检查 primaryButton 是否被禁用
+  const primaryBtns = document.querySelectorAll('button[class*="primaryButton"]');
+  for (const btn of primaryBtns) {
+    if (btn.disabled) return true;
+    const softDisabled = btn.getAttribute('data-soft-disabled');
+    if (softDisabled === 'true') return true;
+  }
+
+  // 检查按钮文字是否包含 generating
   const buttons = document.querySelectorAll('button');
   for (const btn of buttons) {
     const text = btn.textContent.toLowerCase();
@@ -267,10 +283,14 @@ function isGenerating() {
     }
   }
 
-  // 检查 loading/spinner 状态
-  const spinners = document.querySelectorAll('svg[class*="spinner"], svg[class*="loader"]');
-  for (const spinner of spinners) {
-    if (spinner.offsetParent !== null) {
+  // 检查 loading/progress 相关元素
+  const loadingElements = document.querySelectorAll(
+    '[class*="progress"]',
+    '[class*="loading"]',
+    '[class*="spinner"]'
+  );
+  for (const el of loadingElements) {
+    if (el.offsetParent !== null && getComputedStyle(el).display !== 'none') {
       return true;
     }
   }
