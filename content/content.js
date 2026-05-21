@@ -224,11 +224,31 @@ async function inputPromptWithParts(parts) {
   promptInput.focus();
   await randomDelay(100);
 
-  // 清空现有内容
-  promptInput.textContent = '';
+  // 清空现有内容 - 多种方式确保清空
+  console.log('[Runway Queue] 清空输入框，当前内容:', promptInput.textContent.substring(0, 50));
+
+  // 方式1: Ctrl+A 全选，然后 Delete
+  document.execCommand('selectAll', false, null);
+  await randomDelay(100);
+  document.execCommand('delete', false, null);
+  await randomDelay(100);
+
+  // 方式2: 直接清空 innerHTML
   promptInput.innerHTML = '';
+
+  // 方式3: 清空 textContent
+  promptInput.textContent = '';
+
+  // 方式4: 模拟键盘 Delete
+  const deleteEvent = new KeyboardEvent('keydown', { key: 'Delete', keyCode: 46, bubbles: true });
+  promptInput.dispatchEvent(deleteEvent);
+
+  // 方式5: 触发 input 事件
   promptInput.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContent' }));
-  await randomDelay(300);
+
+  await randomDelay(500);
+
+  console.log('[Runway Queue] 清空后内容:', promptInput.textContent || '(空)');
 
   // 逐字输入每个部分
   for (const part of parts) {
