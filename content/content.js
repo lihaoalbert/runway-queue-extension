@@ -3,13 +3,14 @@
 let isRunning = false;
 let currentTask = null;
 let checkInterval = null;
+let isProcessing = false;  // 内存标记：防止并发打字（running 状态仅用于崩溃恢复）
 let queue = [];
 let currentIndex = 0;
 let settings = {
   checkInterval: 150000,     // 检查间隔 (ms)
   successDelay: 5000,        // 成功后延迟 (ms)
   randomDelay: 5000,         // 随机延迟范围 (ms)
-  maxRetries: 3,             // 最大重试次数
+  maxRetries: 10,            // 最大重试次数
   defaultDuration: '15s',   // 默认时长设置
   testMode: false,           // 测试模式：不点击Generate按钮
 };
@@ -23,6 +24,18 @@ async function loadStateFromStorage() {
     isRunning = data.isRunning || false;
     if (data.settings) {
       settings = { ...settings, ...data.settings };
+    }
+    // 重置残留的 running 任务（上次会话异常中断导致）
+    let cleaned = false;
+    for (const t of queue) {
+      if (t.status === 'running') {
+        t.status = 'pending';
+        cleaned = true;
+      }
+    }
+    if (cleaned) {
+      await chrome.storage.local.set({ queue });
+      console.log('[Runway Queue] 已重置残留的 running 任务');
     }
     console.log('[Runway Queue] Loaded state: isRunning=', isRunning, 'queueLength=', queue.length, 'currentIndex=', currentIndex);
     return true;
@@ -565,23 +578,26 @@ async function mainLoop() {
     'running:', queue.filter(t => t.status === 'running').length,
     'completed:', queue.filter(t => t.status === 'completed').length);
 
-  // Step 1: 检查是否有任务正在处理中（打字 + 点击期间）
-  const runningTask = queue.find(t => t.status === 'running');
-  if (runningTask) {
-    console.log('[Runway Queue] 有任务正在处理中，跳过本轮');
+  // Step 1: 防止并发打字（同一时间只能有一个输入流程在进行）
+  if (isProcessing) {
+    console.log('[Runway Queue] 正在输入任务中，跳过本轮');
     return;
   }
 
-  // Step 2: 检查是否有可用槽位（Generate 按钮可用 + 文本框有内容 → 槽位已满）
+  // Step 2: 检查 runWay 是否有可用槽位（支持 2 个并发生成）
   if (isGenerating()) {
-    console.log('[Runway Queue] 槽位已满，等待...');
+    console.log('[Runway Queue] 槽位已满（2个都在生成中），等待...');
     return;
   }
 
-  // Step 3: 找下一个待提交任务
-  const nextIndex = queue.findIndex(t => t.status === 'pending');
+  // Step 3: 找下一个待提交任务（跳过重试次数已达上限的）
+  const nextIndex = queue.findIndex(t =>
+    t.status === 'pending' && (t.retries || 0) < settings.maxRetries
+  );
   if (nextIndex === -1) {
-    const allDone = queue.every(t => t.status === 'completed' || t.status === 'failed');
+    const allDone = queue.every(t =>
+      t.status === 'completed' || ((t.retries || 0) >= settings.maxRetries)
+    );
     if (allDone) {
       console.log('[Runway Queue] 所有任务已完成，停止队列');
       isRunning = false;
@@ -592,7 +608,8 @@ async function mainLoop() {
     return;
   }
 
-  // Step 4: 标记为 running 并处理（防止并发重复处理同一任务）
+  // Step 4: 处理任务
+  isProcessing = true;
   const task = queue[nextIndex];
   task.status = 'running';
   currentIndex = nextIndex;
@@ -602,22 +619,43 @@ async function mainLoop() {
 
   const result = await processTask(task);
 
+  // 从当前 queue 重新获取任务引用（saveStateToStorage→onChanged 可能已替换 queue 数组）
+  const t = queue[currentIndex];
+  if (!t) {
+    console.log('[Runway Queue] 任务引用丢失，重新加载状态');
+    await loadStateFromStorage();
+    isProcessing = false;
+    return;
+  }
+
   if (result.success) {
-    // 点击了 Generate 按钮 → 任务完成
-    task.status = 'completed';
-    task.completedAt = new Date().toISOString();
-    console.log('[Runway Queue] 任务[', currentIndex, ']已完成');
+    // 点击了 Generate 按钮 → 任务已提交给 Runway 生成，立即标记完成
+    t.status = 'completed';
+    t.completedAt = new Date().toISOString();
+    console.log('[Runway Queue] 任务[', currentIndex, ']已提交');
   } else if (result.error === 'paused') {
     // 被暂停 → 恢复为 pending
-    task.status = 'pending';
+    t.status = 'pending';
     console.log('[Runway Queue] 任务[', currentIndex, ']被暂停，恢复为 pending');
   } else {
-    // 其他错误 → 标记失败
-    task.status = 'failed';
-    task.error = result.error;
-    console.log('[Runway Queue] 任务[', currentIndex, ']失败:', result.error);
+    // 其他错误 → 恢复为 pending，记录重试次数
+    t.status = 'pending';
+    t.retries = (t.retries || 0) + 1;
+    t.lastError = result.error;
+    console.log('[Runway Queue] 任务[', currentIndex, ']出错，重试', t.retries, '/', settings.maxRetries, ':', result.error);
   }
   await saveStateToStorage();
+  isProcessing = false;
+
+  // Step 5: 立即尝试提交下一个任务，充分利用 2 个并发槽位
+  // 不使用递归而是 setTimeout，避免无限递归 + 给 DOM 更新留时间
+  if (isRunning && !isGenerating()) {
+    const hasPending = queue.some(t => t.status === 'pending');
+    if (hasPending) {
+      console.log('[Runway Queue] 槽位有空，1秒后提交下一个任务');
+      setTimeout(mainLoop, 1000);
+    }
+  }
 }
 
 // 启动轮询：立刻执行一次，然后定时执行

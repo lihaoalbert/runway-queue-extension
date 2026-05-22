@@ -179,8 +179,13 @@
       opacity: 0.6;
     }
 
-    .queue-item.failed {
+    .queue-item.retried {
+      border: 1px solid #fbbf24;
+    }
+
+    .queue-item.max-retries {
       border: 1px solid #f87171;
+      opacity: 0.7;
     }
 
     .queue-item-index {
@@ -212,7 +217,11 @@
       color: #4ade80;
     }
 
-    .queue-item-status.failed {
+    .queue-item-status.retried {
+      color: #fbbf24;
+    }
+
+    .queue-item-status.max-retries {
       color: #f87171;
     }
 

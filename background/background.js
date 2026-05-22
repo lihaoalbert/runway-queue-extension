@@ -6,7 +6,7 @@ let settings = {
   checkInterval: 150000,     // 检查间隔 (ms)
   successDelay: 5000,        // 成功后延迟 (ms)
   randomDelay: 5000,         // 随机延迟范围 (ms)
-  maxRetries: 3,             // 最大重试次数
+  maxRetries: 10,            // 最大重试次数
   defaultDuration: '15s',   // 默认时长设置
 };
 
@@ -32,10 +32,11 @@ async function addTask(task) {
   queue.push({
     id: Date.now(),
     prompt: task.prompt,
-    status: 'pending', // pending, running, completed, failed
+    status: 'pending', // pending, running, completed
+    retries: 0,
     addedAt: new Date().toISOString(),
     completedAt: null,
-    error: null,
+    lastError: null,
   });
   await saveData();
   notifyContentScript('queueUpdated', { queue, currentIndex, isRunning });
@@ -140,9 +141,9 @@ async function handleMessage(message) {
 
     case 'taskFailed':
       if (currentIndex < queue.length) {
-        queue[currentIndex].status = 'failed';
-        queue[currentIndex].error = message.data.error;
-        currentIndex++;
+        queue[currentIndex].status = 'pending';
+        queue[currentIndex].retries = (queue[currentIndex].retries || 0) + 1;
+        queue[currentIndex].lastError = message.data.error;
         await saveData();
         notifyContentScript('queueUpdated', { queue, currentIndex, isRunning });
       }

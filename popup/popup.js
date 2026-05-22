@@ -108,9 +108,10 @@ async function addToQueue() {
     id: Date.now(),
     prompt: prompt,
     status: 'pending',
+    retries: 0,
     addedAt: new Date().toISOString(),
     completedAt: null,
-    error: null,
+    lastError: null,
   });
 
   await saveStatus();
@@ -205,9 +206,10 @@ async function confirmBatch() {
       id: Date.now() + added,
       prompt: prompt,
       status: 'pending',
+      retries: 0,
       addedAt: new Date().toISOString(),
       completedAt: null,
-      error: null,
+      lastError: null,
     });
     added++;
   }
@@ -238,13 +240,13 @@ function updateUI() {
 
   if (currentStatus.isRunning) {
     statusDot.classList.add('running');
-    const pendingCount = currentStatus.queue.filter(t => t.status !== 'completed' && t.status !== 'failed').length;
+    const pendingCount = currentStatus.queue.filter(t => t.status !== 'completed').length;
     statusText.textContent = `运行中 (${pendingCount} 个待处理)`;
     toggleBtn.textContent = '停止';
     toggleBtn.classList.add('stop');
   } else {
     statusDot.classList.remove('running');
-    const pendingCount = currentStatus.queue.filter(t => t.status !== 'completed' && t.status !== 'failed').length;
+    const pendingCount = currentStatus.queue.filter(t => t.status !== 'completed').length;
     statusText.textContent = currentStatus.queue.length > 0 ? `已暂停 (${pendingCount} 个待处理)` : '已停止';
     toggleBtn.textContent = '开始';
     toggleBtn.classList.remove('stop');
@@ -276,24 +278,43 @@ function renderQueue() {
   }
 
   list.innerHTML = currentStatus.queue.map((task, index) => {
-    const statusClass = task.status === 'completed' ? 'completed' :
-                        task.status === 'failed' ? 'failed' :
-                        task.status === 'running' ? 'running' : '';
+    const retries = task.retries || 0;
+    const maxRetries = (currentStatus.settings && currentStatus.settings.maxRetries) || 10;
 
-    const itemClass = index === currentStatus.currentIndex ? 'current' : statusClass;
-    const statusText = task.status === 'completed' ? '✓ 已完成' :
-                       task.status === 'failed' ? `✗ 失败` :
-                       task.status === 'running' ? '⟳ 处理中' : '○ 等待中';
+    let statusClass, itemClass, statusText;
+
+    if (task.status === 'completed') {
+      statusClass = 'completed';
+      statusText = '✓ 已完成';
+    } else if (task.status === 'running') {
+      statusClass = 'running';
+      statusText = '⟳ 处理中';
+    } else if (retries >= maxRetries) {
+      statusClass = 'max-retries';
+      statusText = `⚠ 等待中（已重试 ${retries} 次）`;
+    } else if (retries > 0) {
+      statusClass = 'retried';
+      statusText = `○ 等待中（已重试 ${retries} 次）`;
+    } else {
+      statusClass = '';
+      statusText = '○ 等待中';
+    }
+
+    itemClass = index === currentStatus.currentIndex ? 'current' : statusClass;
 
     // 截断长提示词
     const shortPrompt = task.prompt.length > 60 ?
       task.prompt.substring(0, 60) + '...' : task.prompt;
 
+    // 重试次数过多时显示最后错误
+    const errorHint = (retries > 0 && task.lastError) ?
+      ` title="${escapeHtml(task.lastError).substring(0, 100)}"` : '';
+
     return `
       <div class="queue-item ${itemClass}" data-id="${task.id}">
         <span class="queue-item-index">${index + 1}</span>
         <div class="queue-item-content">
-          <div class="queue-item-prompt">${escapeHtml(shortPrompt)}</div>
+          <div class="queue-item-prompt"${errorHint}>${escapeHtml(shortPrompt)}</div>
           <div class="queue-item-status ${statusClass}">${statusText}</div>
         </div>
         <button class="delete-btn" data-delete-id="${task.id}" title="删除">×</button>
