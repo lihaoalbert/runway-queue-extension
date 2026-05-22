@@ -3,7 +3,7 @@ let queue = [];
 let isRunning = false;
 let currentIndex = 0;
 let settings = {
-  checkInterval: 60000,      // 检查间隔 (ms)
+  checkInterval: 150000,     // 检查间隔 (ms)
   successDelay: 5000,        // 成功后延迟 (ms)
   randomDelay: 5000,         // 随机延迟范围 (ms)
   maxRetries: 3,             // 最大重试次数
