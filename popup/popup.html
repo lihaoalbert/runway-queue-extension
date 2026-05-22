@@ -285,6 +285,150 @@
       font-size: 11px;
       color: #555;
     }
+
+    /* 批量导入弹窗 */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.7);
+      z-index: 100;
+      justify-content: center;
+      align-items: flex-start;
+      padding-top: 20px;
+    }
+
+    .modal-overlay.show { display: flex; }
+
+    .modal {
+      background: #1a1a2e;
+      border: 1px solid #333;
+      border-radius: 12px;
+      width: 90%;
+      max-height: 85vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .modal-header {
+      padding: 16px;
+      border-bottom: 1px solid #333;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .modal-header h2 { font-size: 16px; margin: 0; }
+
+    .modal-close {
+      background: none; border: none;
+      color: #888; font-size: 20px; cursor: pointer;
+    }
+    .modal-close:hover { color: #f87171; }
+
+    .modal-body {
+      padding: 16px;
+      overflow-y: auto;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .modal-body label {
+      font-size: 13px;
+      color: #888;
+    }
+
+    .modal-body textarea {
+      width: 100%;
+      min-height: 180px;
+      background: #16162a;
+      border: 1px solid #333;
+      border-radius: 8px;
+      color: #eee;
+      font-family: inherit;
+      font-size: 13px;
+      padding: 12px;
+      resize: vertical;
+      outline: none;
+    }
+    .modal-body textarea:focus { border-color: #667eea; }
+
+    .delimiter-row {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .delimiter-row input {
+      flex: 1;
+      padding: 8px 12px;
+      background: #16162a;
+      border: 1px solid #333;
+      border-radius: 6px;
+      color: #eee;
+      font-size: 13px;
+      outline: none;
+    }
+    .delimiter-row input:focus { border-color: #667eea; }
+
+    .delimiter-row .btn { flex: 0; padding: 8px 16px; }
+
+    .preview-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .preview-list {
+      max-height: 150px;
+      overflow-y: auto;
+      border: 1px solid #333;
+      border-radius: 8px;
+      background: #16162a;
+    }
+
+    .preview-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+      font-size: 12px;
+    }
+    .preview-item:last-child { border-bottom: none; }
+
+    .preview-index {
+      background: #333;
+      color: #888;
+      padding: 2px 6px;
+      border-radius: 8px;
+      font-size: 10px;
+      flex-shrink: 0;
+    }
+
+    .preview-text {
+      flex: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: #ddd;
+    }
+
+    .preview-count {
+      font-size: 11px;
+      color: #888;
+    }
+
+    .modal-footer {
+      padding: 12px 16px;
+      border-top: 1px solid #333;
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+    }
   </style>
 </head>
 <body>
@@ -310,7 +454,8 @@
     </div>
     <div class="actions">
       <button class="btn btn-primary" id="addBtn">添加到队列</button>
-      <button class="btn btn-secondary" id="clearBtn">清空队列</button>
+      <button class="btn btn-secondary" id="batchBtn">批量导入</button>
+      <button class="btn btn-secondary" id="clearBtn">清空</button>
     </div>
     <div class="hint">
       提示：@文件名 会被处理为单独一行，适合绑定参考图片
@@ -372,6 +517,35 @@
     </div>
     <div class="hint">测试模式：只输入提示词，不提交生成，方便测试 @参考图 绑定</div>
       适当增加延迟可降低被检测为自动化的风险
+    </div>
+  </div>
+
+  <!-- 批量导入弹窗 -->
+  <div class="modal-overlay" id="batchModal">
+    <div class="modal">
+      <div class="modal-header">
+        <h2>批量导入</h2>
+        <button class="modal-close" id="modalClose">&times;</button>
+      </div>
+      <div class="modal-body">
+        <label>粘贴提示词（用分隔符区分每个任务）</label>
+        <textarea id="batchInput" placeholder="任务 1&#10;洪桂萍 @hong&#10;唐思静 @tang&#10;---&#10;任务 2&#10;顾小诺 @tian&#10;顾城 @chen11&#10;---&#10;任务 3&#10;..."></textarea>
+        <div class="delimiter-row">
+          <label style="white-space: nowrap;">分隔符：</label>
+          <input type="text" id="delimiter" value="---" placeholder="---">
+          <button class="btn btn-primary" id="parseBtn" style="flex:0; padding:8px 16px;">解析</button>
+        </div>
+        <div class="preview-header">
+          <span class="preview-count" id="previewCount">待解析</span>
+        </div>
+        <div class="preview-list" id="previewList">
+          <div class="empty-state" style="padding:20px;">粘贴内容后点击「解析」预览</div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="modalCancel">取消</button>
+        <button class="btn btn-primary" id="modalConfirm" disabled>确认添加 (0)</button>
+      </div>
     </div>
   </div>
 

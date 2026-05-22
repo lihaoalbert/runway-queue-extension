@@ -56,6 +56,15 @@ function bindEvents() {
   // 清空队列
   document.getElementById('clearBtn').addEventListener('click', clearQueue);
 
+  // 批量导入
+  document.getElementById('batchBtn').addEventListener('click', showBatchModal);
+  document.getElementById('modalClose').addEventListener('click', hideBatchModal);
+  document.getElementById('modalCancel').addEventListener('click', hideBatchModal);
+  document.getElementById('parseBtn').addEventListener('click', parseBatch);
+  document.getElementById('batchInput').addEventListener('input', parseBatch);
+  document.getElementById('delimiter').addEventListener('input', parseBatch);
+  document.getElementById('modalConfirm').addEventListener('click', confirmBatch);
+
   // 设置变更
   ['checkInterval', 'successDelay', 'randomDelay'].forEach(id => {
     document.getElementById(id).addEventListener('change', updateSettings);
@@ -129,6 +138,82 @@ async function deleteTask(id) {
     currentStatus.currentIndex = 0;
   }
   await saveStatus();
+  await loadStatus();
+}
+
+// 批量导入
+let parsedTasks = [];
+
+function showBatchModal() {
+  document.getElementById('batchModal').classList.add('show');
+  document.getElementById('batchInput').value = '';
+  document.getElementById('previewCount').textContent = '待解析';
+  document.getElementById('previewList').innerHTML = '<div class="empty-state" style="padding:20px;">粘贴内容后自动解析</div>';
+  document.getElementById('modalConfirm').disabled = true;
+  document.getElementById('modalConfirm').textContent = '确认添加 (0)';
+  parsedTasks = [];
+}
+
+function hideBatchModal() {
+  document.getElementById('batchModal').classList.remove('show');
+}
+
+function parseBatch() {
+  const input = document.getElementById('batchInput').value;
+  const delimiter = document.getElementById('delimiter').value || '---';
+
+  if (!input.trim()) {
+    document.getElementById('previewCount').textContent = '待解析';
+    document.getElementById('previewList').innerHTML = '<div class="empty-state" style="padding:20px;">粘贴内容后自动解析</div>';
+    document.getElementById('modalConfirm').disabled = true;
+    document.getElementById('modalConfirm').textContent = '确认添加 (0)';
+    parsedTasks = [];
+    return;
+  }
+
+  // 按分隔符拆分，转义特殊正则字符
+  const escaped = delimiter.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const parts = input.split(new RegExp(escaped)).map(s => s.trim()).filter(s => s.length > 0);
+  parsedTasks = parts;
+
+  document.getElementById('previewCount').textContent = `解析结果：${parts.length} 个任务`;
+  document.getElementById('modalConfirm').disabled = parts.length === 0;
+  document.getElementById('modalConfirm').textContent = `确认添加 (${parts.length})`;
+
+  if (parts.length === 0) {
+    document.getElementById('previewList').innerHTML = '<div class="empty-state" style="padding:20px;">未检测到任务，请检查分隔符</div>';
+    return;
+  }
+
+  document.getElementById('previewList').innerHTML = parts.map((text, i) => {
+    const preview = text.length > 80 ? text.substring(0, 80).replace(/\n/g, ' ') + '...' : text.replace(/\n/g, ' ');
+    return `
+      <div class="preview-item">
+        <span class="preview-index">${i + 1}</span>
+        <span class="preview-text" title="${escapeHtml(text).substring(0, 200)}">${escapeHtml(preview)}</span>
+      </div>
+    `;
+  }).join('');
+}
+
+async function confirmBatch() {
+  if (parsedTasks.length === 0) return;
+
+  let added = 0;
+  for (const prompt of parsedTasks) {
+    currentStatus.queue.push({
+      id: Date.now() + added,
+      prompt: prompt,
+      status: 'pending',
+      addedAt: new Date().toISOString(),
+      completedAt: null,
+      error: null,
+    });
+    added++;
+  }
+
+  await saveStatus();
+  hideBatchModal();
   await loadStatus();
 }
 
