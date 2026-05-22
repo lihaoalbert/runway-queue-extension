@@ -236,6 +236,17 @@ async function setDuration(targetDuration) {
   }
 }
 
+// 强制将光标定位到 contenteditable 元素末尾
+// 解决 Windows 上 Lexical 编辑器逐字输入时光标漂移的问题
+function placeCaretAtEnd(el) {
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  range.collapse(false); // false = 折叠到末尾
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
 // 向文本框输入内容（使用已解析的文本段）
 // shouldContinue: 可选回调，返回 false 时中断输入
 async function inputPromptWithParts(parts, shouldContinue) {
@@ -371,6 +382,8 @@ async function inputPromptWithParts(parts, shouldContinue) {
             return;
           }
           document.execCommand('insertText', false, part.content[i]);
+          // 每次插入后强制光标到末尾，防止 Windows 上 Lexical 光标漂移
+          placeCaretAtEnd(promptInput);
           await randomDelay(20 + Math.random() * 30);
         }
       } else if (part.type === 'reference') {
@@ -383,6 +396,7 @@ async function inputPromptWithParts(parts, shouldContinue) {
             return;
           }
           document.execCommand('insertText', false, refName[i]);
+          placeCaretAtEnd(promptInput);
           await randomDelay(20 + Math.random() * 30);
         }
         // 暂停检查（1秒等待前）
@@ -407,6 +421,8 @@ async function inputPromptWithParts(parts, shouldContinue) {
           bubbles: true,
           cancelable: true
         }));
+        // 回车后强制光标到末尾
+        placeCaretAtEnd(promptInput);
         await randomDelay(300);
         console.log('[Runway Queue] 参考图已回车绑定:', refName);
       }
