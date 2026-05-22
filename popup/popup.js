@@ -57,7 +57,7 @@ function bindEvents() {
   document.getElementById('clearBtn').addEventListener('click', clearQueue);
 
   // 设置变更
-  ['checkInterval', 'successDelay', 'randomDelay', 'generationTimeout'].forEach(id => {
+  ['checkInterval', 'successDelay', 'randomDelay'].forEach(id => {
     document.getElementById(id).addEventListener('change', updateSettings);
   });
   document.getElementById('defaultDuration').addEventListener('change', updateSettings);
@@ -140,7 +140,6 @@ async function updateSettings() {
     randomDelay: parseInt(document.getElementById('randomDelay').value) * 1000,
     defaultDuration: document.getElementById('defaultDuration').value,
     testMode: document.getElementById('testMode').checked,
-    generationTimeout: parseInt(document.getElementById('generationTimeout').value) * 60000,
   };
   await saveStatus();
 }
@@ -179,7 +178,6 @@ function updateUI() {
     document.getElementById('randomDelay').value = (currentStatus.settings.randomDelay || 5000) / 1000;
     document.getElementById('defaultDuration').value = currentStatus.settings.defaultDuration || '';
     document.getElementById('testMode').checked = currentStatus.settings.testMode || false;
-    document.getElementById('generationTimeout').value = (currentStatus.settings.generationTimeout || 900000) / 60000;
   }
 }
 

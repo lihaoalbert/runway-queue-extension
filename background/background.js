@@ -8,7 +8,6 @@ let settings = {
   randomDelay: 5000,         // 随机延迟范围 (ms)
   maxRetries: 3,             // 最大重试次数
   defaultDuration: '15s',   // 默认时长设置
-  generationTimeout: 900000, // 生成超时 (ms)，默认 15 分钟
 };
 
 // 从 storage 加载数据
