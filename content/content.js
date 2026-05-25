@@ -259,6 +259,104 @@ function placeCaretAtEnd(el) {
   sel.addRange(range);
 }
 
+// 清除所有已绑定的参考图缩略图（Runway 界面中 prompt 区域外的附件）
+async function clearReferenceAttachments() {
+  // 策略1：查找参考图容器内的删除按钮
+  // Runway 参考图缩略图通常在 prompt 区域下方/旁边，带有 X 关闭按钮
+  const removeSelectors = [
+    // 参考图缩略图的关闭按钮
+    'button[aria-label*="Remove" i]',
+    'button[aria-label*="remove" i]',
+    'button[aria-label*="Delete" i]',
+    'button[aria-label*="delete" i]',
+    'button[aria-label*="Close" i]',
+    'button[aria-label*="close" i]',
+    'button[aria-label*="clear" i]',
+    'button[aria-label*="Clear" i]',
+    'button[aria-label*="Dismiss" i]',
+    // SVG 图标的父按钮（点击关闭）
+    'svg.lucide-x + button',
+    'svg.lucide-x',
+    'button:has(svg.lucide-x)',
+    // 参考图区域的关闭元素
+    '[data-testid*="remove"]',
+    '[data-testid*="Remove"]',
+    '[data-testid*="close"]',
+    '[data-testid*="Close"]',
+    '[role="button"][aria-label*="remove" i]',
+    '[role="button"][aria-label*="Remove" i]',
+  ];
+
+  let removedCount = 0;
+  for (const selector of removeSelectors) {
+    try {
+      const elements = document.querySelectorAll(selector);
+      for (const el of elements) {
+        // 跳过不可见或 disabled 的元素
+        if (el.offsetParent === null && el.tagName !== 'svg') continue;
+        if (el.disabled) continue;
+        // 对于 SVG，点击其父元素
+        const target = el.tagName === 'svg' ? (el.closest('button') || el.parentElement) : el;
+        if (target && target.offsetParent !== null) {
+          target.click();
+          removedCount++;
+          await randomDelay(200);
+        }
+      }
+    } catch (e) {
+      // 选择器可能无效，忽略
+    }
+  }
+
+  // 策略2：查找参考图缩略图容器，找其中的关闭按钮
+  const containerSelectors = [
+    '[class*="reference" i]',
+    '[class*="Reference" i]',
+    '[class*="attachment" i]',
+    '[class*="Attachment" i]',
+    '[class*="thumbnail" i]',
+    '[class*="Thumbnail" i]',
+    '[class*="chip" i]',
+    '[class*="Chip" i]',
+    '[class*="image-preview" i]',
+    '[class*="ImagePreview" i]',
+    '[class*="uploaded" i]',
+    '[class*="Uploaded" i]',
+  ];
+
+  for (const selector of containerSelectors) {
+    try {
+      const containers = document.querySelectorAll(selector);
+      for (const container of containers) {
+        // 在每个容器中找关闭/删除按钮
+        const buttons = container.querySelectorAll('button');
+        for (const btn of buttons) {
+          const label = (btn.getAttribute('aria-label') || '').toLowerCase();
+          const text = (btn.textContent || '').trim();
+          if (label.includes('remove') || label.includes('delete') || label.includes('close') ||
+              label.includes('dismiss') || label.includes('clear') ||
+              text === '×' || text === '✕' || text === '✖' || text === 'x' || text === 'X') {
+            if (btn.offsetParent !== null && !btn.disabled) {
+              btn.click();
+              removedCount++;
+              await randomDelay(200);
+            }
+          }
+        }
+      }
+    } catch (e) {
+      // 选择器可能无效，忽略
+    }
+  }
+
+  if (removedCount > 0) {
+    console.log('[Runway Queue] 已清除', removedCount, '个参考图附件');
+    await randomDelay(500); // 等待 DOM 更新
+  } else {
+    console.log('[Runway Queue] 未找到需要清除的参考图附件');
+  }
+}
+
 // 向文本框输入内容（使用已解析的文本段）
 // shouldContinue: 可选回调，返回 false 时中断输入
 async function inputPromptWithParts(parts, shouldContinue) {
@@ -540,6 +638,10 @@ async function processTask(task) {
   console.log('[Runway Queue] 测试模式:', settings.testMode ? '开启' : '关闭');
 
   try {
+    // 任务开始前先清除已有的参考缩略图（不同分镜引用图不同，最多 8 个）
+    await clearReferenceAttachments();
+    await new Promise(resolve => setTimeout(resolve, 1000));
+
     const parts = findReferenceImages(task.prompt);
     console.log('[Runway Queue] 解析到', parts.length, '个文本段');
 
